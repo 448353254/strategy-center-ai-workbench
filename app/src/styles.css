@@ -1067,26 +1067,55 @@ textarea {
 
 .gantt {
   display: grid;
-  gap: 16px;
+  gap: 12px;
+  overflow-x: auto;
 }
 
 .gantt-scale,
 .gantt-row {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: minmax(220px, 0.38fr) minmax(520px, 1fr);
   gap: 16px;
   align-items: center;
 }
 
 .gantt-scale {
-  margin-left: 236px;
-  grid-template-columns: repeat(7, 1fr);
   color: var(--muted);
   font-size: 12px;
 }
 
+.gantt-scale-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.gantt-row {
+  min-width: 780px;
+}
+
+.gantt-row-button {
+  width: 100%;
+  border: 0;
+  border-radius: 16px;
+  padding: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.gantt-row-button:hover {
+  background: rgba(255, 255, 255, 0.62);
+}
+
 .gantt-row strong {
+  display: grid;
+  gap: 4px;
   font-size: 14px;
+}
+
+.gantt-row small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .gantt-track {
@@ -1099,6 +1128,7 @@ textarea {
 .gantt-bar {
   position: absolute;
   top: 5px;
+  min-width: 48px;
   height: 26px;
   padding: 5px 12px;
   border-radius: 999px;
@@ -1112,6 +1142,18 @@ textarea {
   background: var(--red);
 }
 
+.soft-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(23, 33, 43, 0.06);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .empty-state {
   display: grid;
   min-height: 240px;
@@ -1120,6 +1162,10 @@ textarea {
   border-radius: 22px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.5);
+}
+
+.empty-state.compact {
+  min-height: 120px;
 }
 
 hr {

@@ -406,6 +406,30 @@ function daysUntil(dateText: string) {
   return Math.ceil((date.getTime() - todayDate.getTime()) / 86400000);
 }
 
+function parseScheduleDate(dateText: string, fallbackYear: string) {
+  const normalized = /^\d{2}-\d{2}$/.test(dateText) ? `${fallbackYear}-${dateText}` : dateText;
+  const date = new Date(`${normalized}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function formatMonthDay(date: Date) {
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function daysBetween(start: Date, end: Date) {
+  return Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000));
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function normalizeTaskDate(dateText: string, project: Project) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return dateText;
   if (/^\d{2}-\d{2}$/.test(dateText)) return `${project.submit.slice(0, 4)}-${dateText}`;
@@ -901,6 +925,7 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
           {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
         </select>
       </div>
+      <ProjectGanttOverview projects={filteredProjects} members={members} openProject={openProject} />
       <Card title="项目列表">
         <table>
           <thead>
@@ -1202,7 +1227,7 @@ function ProjectDetail({ project, members, projects, resources, openResource, se
           </table>
         </Card>
       )}
-      {tab === "甘特图" && <Gantt tasks={project.tasks} members={members} />}
+      {tab === "甘特图" && <Gantt project={project} tasks={project.tasks} members={members} />}
       {tab === "项目资料" && (
         <Card title="关联资料">
           <div className="attach-row">
@@ -2223,22 +2248,124 @@ function FormGrid({ fields }: { fields: string[] }) {
   );
 }
 
-function Gantt({ tasks, members }: { tasks: ProjectTask[]; members: Member[] }) {
+interface GanttTimelineItem {
+  id: number;
+  title: string;
+  meta: string;
+  start: Date;
+  end: Date;
+  progress: number;
+  status: string;
+  risk: Risk;
+  onClick?: () => void;
+}
+
+function buildTimeline(items: GanttTimelineItem[]) {
+  const starts = items.map((item) => item.start.getTime());
+  const ends = items.map((item) => item.end.getTime());
+  const earliest = starts.length ? new Date(Math.min(...starts)) : new Date(`${today()}T00:00:00`);
+  const latest = ends.length ? new Date(Math.max(...ends)) : addDays(earliest, 6);
+  const paddedStart = addDays(earliest, -1);
+  const paddedEnd = addDays(latest, 1);
+  const totalDays = Math.max(1, daysBetween(paddedStart, paddedEnd));
+  const scale = Array.from({ length: 7 }, (_, index) => formatMonthDay(addDays(paddedStart, Math.round((totalDays * index) / 6))));
+  return { start: paddedStart, totalDays, scale };
+}
+
+function timelineStyle(item: GanttTimelineItem, timeline: ReturnType<typeof buildTimeline>) {
+  const left = clamp((daysBetween(timeline.start, item.start) / timeline.totalDays) * 100, 0, 96);
+  const width = clamp(((daysBetween(item.start, item.end) + 1) / timeline.totalDays) * 100, 4, 100 - left);
+  return { left: `${left}%`, width: `${width}%` };
+}
+
+function projectProgress(project: Project) {
+  if (!project.tasks.length) return 0;
+  return Math.round(project.tasks.reduce((total, task) => total + task.progress, 0) / project.tasks.length);
+}
+
+function projectEndDate(project: Project) {
+  const fallbackYear = project.start.slice(0, 4) || today().slice(0, 4);
+  const taskEnds = project.tasks
+    .map((task) => parseScheduleDate(task.end, fallbackYear))
+    .filter((date): date is Date => Boolean(date));
+  const milestones = [parseScheduleDate(project.submit, fallbackYear), parseScheduleDate(project.pitch, fallbackYear), ...taskEnds].filter((date): date is Date => Boolean(date));
+  if (!milestones.length) return parseScheduleDate(project.start, fallbackYear) ?? new Date(`${today()}T00:00:00`);
+  return new Date(Math.max(...milestones.map((date) => date.getTime())));
+}
+
+function ProjectGanttOverview({ projects, members, openProject }: { projects: Project[]; members: Member[]; openProject: (id: number) => void }) {
+  const items = projects
+    .map((project) => {
+      const fallbackYear = project.start.slice(0, 4) || project.submit.slice(0, 4) || today().slice(0, 4);
+      return {
+        id: project.id,
+        title: project.name,
+        meta: `${project.type} / ${memberName(members, project.ownerId, project.owner)} / ${project.stage}`,
+        start: parseScheduleDate(project.start, fallbackYear) ?? new Date(`${today()}T00:00:00`),
+        end: projectEndDate(project),
+        progress: projectProgress(project),
+        status: project.status,
+        risk: inferProjectRisk(project),
+        onClick: () => openProject(project.id),
+      };
+    })
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const timeline = buildTimeline(items);
+
+  return (
+    <Card title="项目总进度甘特图" action={<span className="soft-pill">共 {items.length} 个项目</span>}>
+      {items.length ? <GanttTimeline items={items} timeline={timeline} /> : <div className="empty-state compact">暂无符合筛选条件的项目</div>}
+    </Card>
+  );
+}
+
+function GanttTimeline({ items, timeline }: { items: GanttTimelineItem[]; timeline: ReturnType<typeof buildTimeline> }) {
+  return (
+    <div className="gantt">
+      <div className="gantt-scale">
+        <span />
+        <div className="gantt-scale-days">
+          {timeline.scale.map((day) => <span key={day}>{day}</span>)}
+        </div>
+      </div>
+      {items.map((item) => {
+        const row = (
+          <>
+            <strong>{item.title}<small>{item.meta}</small></strong>
+            <div className="gantt-track">
+              <span className={item.status === "延期" || item.risk === "紧急" || item.risk === "严重" ? "gantt-bar delayed" : "gantt-bar"} style={timelineStyle(item, timeline)}>
+                {item.progress}%
+              </span>
+            </div>
+          </>
+        );
+        return item.onClick ? (
+          <button className="gantt-row gantt-row-button" key={item.id} onClick={item.onClick}>{row}</button>
+        ) : (
+          <div className="gantt-row" key={item.id}>{row}</div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Gantt({ project, tasks, members }: { project: Project; tasks: ProjectTask[]; members: Member[] }) {
+  const fallbackYear = project.submit.slice(0, 4) || project.start.slice(0, 4) || today().slice(0, 4);
+  const items = tasks.map((task) => ({
+    id: task.id,
+    title: task.name,
+    meta: `${task.phase} / ${memberName(members, task.ownerId, task.owner)}`,
+    start: parseScheduleDate(task.start, fallbackYear) ?? parseScheduleDate(project.start, fallbackYear) ?? new Date(`${today()}T00:00:00`),
+    end: parseScheduleDate(task.end, fallbackYear) ?? parseScheduleDate(project.submit, fallbackYear) ?? new Date(`${today()}T00:00:00`),
+    progress: task.progress,
+    status: task.status,
+    risk: inferTaskRisk(task, project),
+  }));
+  const timeline = buildTimeline(items);
+
   return (
     <Card title="甘特图">
-      <div className="gantt">
-        <div className="gantt-scale">
-          {["04-29", "05-01", "05-03", "05-05", "05-07", "05-09", "05-11"].map((day) => <span key={day}>{day}</span>)}
-        </div>
-        {tasks.map((task, index) => (
-          <div className="gantt-row" key={task.id}>
-            <strong>{task.name}</strong>
-            <div className="gantt-track">
-              <span className={task.status === "延期" ? "gantt-bar delayed" : "gantt-bar"} style={{ left: `${index * 12 + 4}%`, width: "28%" }}>{memberName(members, task.ownerId, task.owner)}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+      {items.length ? <GanttTimeline items={items} timeline={timeline} /> : <div className="empty-state compact">暂无排期任务</div>}
     </Card>
   );
 }
