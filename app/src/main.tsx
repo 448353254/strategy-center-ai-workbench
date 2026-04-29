@@ -75,7 +75,18 @@ interface Resource {
   mimeType?: string;
   parseStatus?: "等待中" | "解析中" | "成功" | "失败";
   parseError?: string;
+  structuredContent?: SpreadsheetContent;
   chunks?: Array<{ id: string; text: string; embedding?: Record<string, number> }>;
+}
+
+interface SpreadsheetContent {
+  kind: "spreadsheet";
+  sheets: Array<{
+    name: string;
+    rows: string[][];
+    rowCount?: number;
+    text?: string;
+  }>;
 }
 
 interface AiJob {
@@ -102,6 +113,18 @@ interface BriefApiConfig {
   endpoint: string;
   apiKey: string;
   model: string;
+}
+
+interface BriefInputFile {
+  id: number;
+  name: string;
+  fileSize?: number;
+  mimeType?: string;
+  parseStatus: "成功" | "失败";
+  parseError?: string;
+  summary: string;
+  content: string;
+  structuredContent?: SpreadsheetContent;
 }
 
 interface SearchSettings {
@@ -333,6 +356,121 @@ function summarize(text: string) {
   return compact.length > 92 ? `${compact.slice(0, 92)}...` : compact;
 }
 
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseCsvRows(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(current.trim());
+      current = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(current.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  row.push(current.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+function parseLegacySpreadsheetText(content: string): SpreadsheetContent | undefined {
+  if (!content.includes("# ") || !content.includes(",")) return undefined;
+  const sheets = content
+    .split(/\n(?=# )/)
+    .map((block) => {
+      const firstLineEnd = block.indexOf("\n");
+      const name = block.slice(0, firstLineEnd > -1 ? firstLineEnd : undefined).replace(/^#\s*/, "").trim() || "工作表";
+      const csvText = firstLineEnd > -1 ? block.slice(firstLineEnd + 1) : "";
+      const rows = parseCsvRows(csvText).map((row) => row.map((cell) => cell.trim())).filter((row) => row.some(Boolean));
+      return { name, rows, rowCount: rows.length };
+    })
+    .filter((sheet) => sheet.rows.length);
+  return sheets.length ? { kind: "spreadsheet", sheets } : undefined;
+}
+
+function spreadsheetFromResource(resource: Resource) {
+  if (resource.structuredContent?.kind === "spreadsheet") return resource.structuredContent;
+  const isSpreadsheet = /\.(xlsx|xls|csv)$/i.test(resource.fileName || "") || resource.mimeType?.includes("spreadsheet");
+  return isSpreadsheet ? parseLegacySpreadsheetText(resource.content) : undefined;
+}
+
+function compactRow(row: string[]) {
+  return row.map((cell) => cell.trim()).filter(Boolean);
+}
+
+function spreadsheetEntries(rows: string[][]) {
+  return rows
+    .map(compactRow)
+    .filter((cells) => cells.length >= 2)
+    .map((cells) => ({ label: cells[0], value: cells.slice(1).join(" / ") }))
+    .filter((item) => item.label.length <= 28 && item.value)
+    .slice(0, 80);
+}
+
+function spreadsheetSections(rows: string[][]) {
+  const sections: Array<{ title: string; entries: Array<{ label: string; value: string }> }> = [];
+  let current: { title: string; entries: Array<{ label: string; value: string }> } | undefined;
+  rows.map(compactRow).forEach((cells) => {
+    if (!cells.length) return;
+    const [label, ...values] = cells;
+    const isHeading = cells.length === 1 && /^([一二三四五六七八九十]+、|第.+部分|[0-9]+[.、])/.test(label);
+    if (isHeading) {
+      current = { title: label, entries: [] };
+      sections.push(current);
+      return;
+    }
+    const entry = { label, value: values.join(" / ") };
+    if (!current) {
+      current = { title: "基础信息", entries: [] };
+      sections.push(current);
+    }
+    if (entry.value) current.entries.push(entry);
+  });
+  return sections.filter((section) => section.entries.length);
+}
+
+function importantSpreadsheetEntries(rows: string[][]) {
+  const keywords = ["背景", "目的", "重点", "难点", "需求详情", "效果指标", "考核", "附件", "保密", "排竞", "周期", "预算", "节点", "内容"];
+  return spreadsheetEntries(rows).filter((entry) => keywords.some((keyword) => entry.label.includes(keyword) || entry.value.includes(keyword))).slice(0, 12);
+}
+
 function buildBriefPrompt(form: { projectName: string; gameName: string; projectType: string; usage: string; forbidden: string; brief: string }) {
   return `请基于以下客户 Brief 输出一份中文需求解构报告。
 
@@ -352,6 +490,37 @@ function buildBriefPrompt(form: { projectName: string; gameName: string; project
 禁忌要求：${form.forbidden || "暂无"}
 客户 Brief：
 ${form.brief || "暂无正文"}`;
+}
+
+function classifyBriefFile(fileName: string, content: string) {
+  const source = `${fileName} ${content}`;
+  if (/qa|q&a|答疑|问答|确认/i.test(source)) return "客户 QA / 答疑";
+  if (/补充|附件|资料|素材|背景|介绍/i.test(source)) return "补充资料";
+  if (/brief|需求|需求单|比选|rfp/i.test(source)) return "客户 Brief";
+  return "项目输入资料";
+}
+
+function buildCurrentInputPackage(form: { projectName: string; gameName: string; projectType: string; usage: string; forbidden: string; brief: string }, files: BriefInputFile[]) {
+  const fileSections = files.map((file, index) => {
+    const kind = classifyBriefFile(file.name, file.content);
+    return `## ${index + 1}. ${kind}：${file.name}
+解析状态：${file.parseStatus}${file.parseError ? `（${file.parseError}）` : ""}
+摘要：${file.summary}
+正文：
+${file.content || "暂无可解析正文"}`;
+  });
+  return `本次项目输入包：
+项目名称：${form.projectName || "未命名项目"}
+游戏名称：${form.gameName || "未填写"}
+项目类型：${form.projectType}
+方案用途：${form.usage}
+禁忌要求：${form.forbidden || "暂无"}
+
+手动补充 Brief / 沟通记录：
+${form.brief || "暂无"}
+
+上传文件解析内容：
+${fileSections.length ? fileSections.join("\n\n") : "暂无上传文件"}`;
 }
 
 function inferModelsEndpoint(endpoint: string) {
@@ -399,11 +568,116 @@ AI 标签：
 ${tags.join("、")}`;
 }
 
+function tokenizeForMatch(text: string) {
+  return Array.from(
+    new Set(
+      inferTags(text)
+        .concat(text.split(/\s+|,|，|。|、|\/|：|:|；|;|\n|\(|\)|（|）/))
+        .map((word) => word.trim())
+        .filter((word) => word.length >= 2 && word.length <= 18),
+    ),
+  );
+}
+
+function matchScore(text: string, keywords: string[]) {
+  return keywords.reduce((total, keyword) => total + (text.includes(keyword) ? 1 : 0), 0);
+}
+
+function buildBriefReferenceContext(form: { projectName: string; gameName: string; projectType: string; usage: string; forbidden: string; brief: string }, projects: Project[], resources: Resource[], inputText = "") {
+  const queryText = `${form.projectName} ${form.gameName} ${form.projectType} ${form.usage} ${form.forbidden} ${form.brief} ${inputText}`;
+  const keywords = tokenizeForMatch(queryText);
+  const resourceMatches = resources
+    .map((resource) => {
+      const corpus = `${resource.title} ${resource.type} ${resource.summary} ${resource.content} ${resource.tags.join(" ")}`;
+      const score = matchScore(corpus, keywords);
+      const isBrief = /brief|需求|需求单|客户|比选|RFP/i.test(`${resource.type} ${resource.title} ${resource.content}`);
+      const isQa = /QA|Q&A|答疑|问答|确认|客户确认|补充需求/i.test(`${resource.type} ${resource.title} ${resource.content}`);
+      const isWinning = /中标|成功|高复用|获胜|定标|投标方案|案例|复盘/i.test(`${resource.type} ${resource.title} ${resource.summary} ${resource.content} ${resource.tags.join(" ")}`);
+      return { resource, score: score + (isBrief ? 2 : 0) + (isQa ? 2 : 0) + (isWinning ? 2 : 0), isBrief, isQa, isWinning };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  const projectMatches = projects
+    .map((project) => {
+      const corpus = `${project.name} ${project.game} ${project.client} ${project.type} ${project.stage} ${project.status} ${project.tasks.map((task) => `${task.phase} ${task.name} ${task.delayReason ?? ""}`).join(" ")}`;
+      return { project, score: matchScore(corpus, keywords) + (project.type === form.projectType ? 2 : 0) + (project.status.includes("完成") ? 1 : 0) };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const historicalBriefs = resourceMatches.filter((item) => item.isBrief).slice(0, 3);
+  const qaItems = resourceMatches.filter((item) => item.isQa).slice(0, 3);
+  const winningCases = resourceMatches.filter((item) => item.isWinning).slice(0, 3);
+  const relatedProjects = projectMatches.slice(0, 3);
+  const fallbackResources = resourceMatches.slice(0, 3);
+
+  const lines = [
+    "历史参照检索：",
+    `命中关键词：${keywords.slice(0, 12).join("、") || "暂无"}`,
+    "",
+    "相似历史需求：",
+    ...(historicalBriefs.length ? historicalBriefs.map(({ resource, score }) => `- ${resource.title}（${resource.type}，匹配 ${score}）：${summarize(resource.summary || resource.content)}`) : ["- 暂无明确 Brief/需求类命中，已参考综合资料。"]),
+    "",
+    "历史 QA / 答疑线索：",
+    ...(qaItems.length ? qaItems.map(({ resource, score }) => `- ${resource.title}（匹配 ${score}）：${summarize(resource.content || resource.summary)}`) : ["- 暂无明确 QA/答疑资料，建议在本次输出中补齐客户确认问题。"]),
+    "",
+    "中标/高复用案例：",
+    ...(winningCases.length ? winningCases.map(({ resource, score }) => `- ${resource.title}（匹配 ${score}）：${summarize(resource.summary || resource.content)}`) : fallbackResources.map(({ resource, score }) => `- ${resource.title}（综合参考，匹配 ${score}）：${summarize(resource.summary || resource.content)}`)),
+    "",
+    "相关项目进展经验：",
+    ...(relatedProjects.length ? relatedProjects.map(({ project, score }) => `- ${project.name}（${project.type}，匹配 ${score}）：阶段 ${project.stage}，风险 ${inferProjectRisk(project)}，平均进度 ${projectProgress(project)}%。`) : ["- 暂无匹配项目。"]),
+  ];
+
+  return {
+    text: lines.join("\n"),
+    historicalBriefs,
+    qaItems,
+    winningCases: winningCases.length ? winningCases : fallbackResources,
+    relatedProjects,
+  };
+}
+
+function buildBriefReportWithReferences(form: { projectName: string; gameName: string; projectType: string; usage: string; forbidden: string; brief: string }, referenceText: string) {
+  return `${buildLocalBriefReport(form)}
+
+历史资料分析：
+${referenceText}
+
+基于历史资料的策略提示：
+1. 优先复用相似需求中的考核口径、资源清单和提案附件要求，避免遗漏客户显性评分项。
+2. 对历史 QA 中反复出现的预算、排竞、素材授权、KOL 口径、效果预估问题，提前放入客户确认清单。
+3. 中标或高复用案例只作为结构和论证方式参考，具体资源、报价和数据需按本项目重新确认。`;
+}
+
 function daysUntil(dateText: string) {
   const date = new Date(dateText);
   if (Number.isNaN(date.getTime())) return 999;
   const todayDate = new Date(today());
   return Math.ceil((date.getTime() - todayDate.getTime()) / 86400000);
+}
+
+function parseScheduleDate(dateText: string, fallbackYear: string) {
+  const normalized = /^\d{2}-\d{2}$/.test(dateText) ? `${fallbackYear}-${dateText}` : dateText;
+  const date = new Date(`${normalized}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function formatMonthDay(date: Date) {
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function daysBetween(start: Date, end: Date) {
+  return Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000));
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function normalizeTaskDate(dateText: string, project: Project) {
@@ -665,11 +939,11 @@ function App() {
         {page === "home" && <Home projects={projects} members={members} jobs={jobs} setPage={setPage} openProject={navigateProject} />}
         {page === "projects" && <Projects projects={projects} members={members} openProject={navigateProject} setProjects={setProjects} addJob={addJob} />}
         {page === "projectDetail" && <ProjectDetail project={selectedProject} members={members} projects={projects} resources={resources} openResource={navigateResource} setPage={setPage} setProjects={setProjects} addJob={addJob} />}
-        {page === "people" && <PeopleManagement members={members} setMembers={setMembers} projects={projects} addJob={addJob} />}
+        {page === "people" && <PeopleManagement members={members} setMembers={setMembers} projects={projects} openProject={navigateProject} addJob={addJob} />}
         {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} />}
         {page === "resourceUpload" && <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} />}
         {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} />}
-        {page === "brief" && <BriefAssistant briefOutput={briefOutput} setBriefOutput={setBriefOutput} setPage={setPage} addJob={addJob} />}
+        {page === "brief" && <BriefAssistant briefOutput={briefOutput} setBriefOutput={setBriefOutput} projects={projects} resources={resources} setPage={setPage} addJob={addJob} />}
         {page === "outline" && <OutlineAssistant briefOutput={briefOutput} resources={resources} outlineOutput={outlineOutput} setOutlineOutput={setOutlineOutput} addJob={addJob} />}
         {page === "aiJobs" && <AiJobs jobs={jobs} />}
         {page === "settings" && <Settings />}
@@ -901,6 +1175,7 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
           {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
         </select>
       </div>
+      <ProjectGanttOverview projects={filteredProjects} members={members} openProject={openProject} />
       <Card title="项目列表">
         <table>
           <thead>
@@ -1202,7 +1477,7 @@ function ProjectDetail({ project, members, projects, resources, openResource, se
           </table>
         </Card>
       )}
-      {tab === "甘特图" && <Gantt tasks={project.tasks} members={members} />}
+      {tab === "甘特图" && <Gantt project={project} tasks={project.tasks} members={members} />}
       {tab === "项目资料" && (
         <Card title="关联资料">
           <div className="attach-row">
@@ -1525,6 +1800,7 @@ function ResourceUpload({ setResources, setPage, addJob }: { setResources: React
 
 function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resource: Resource; deleteResource: (id: number) => void; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void }) {
   const [advice, setAdvice] = useState("");
+  const spreadsheet = spreadsheetFromResource(resource);
 
   const generateAdvice = () => {
     setAdvice(`适用场景：${resource.tags.join("、")}相关项目。
@@ -1550,12 +1826,14 @@ function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resourc
       />
       <div className="split-panel large-left">
         <Card title="文件预览">
-          <div className="document-preview">
-            <h2>{resource.title}</h2>
-            <p>{resource.summary}</p>
-            <p>{resource.content}</p>
-            <div className="preview-lines" />
-          </div>
+          {spreadsheet ? <SpreadsheetPreview spreadsheet={spreadsheet} title={resource.title} summary={resource.summary} /> : (
+            <div className="document-preview">
+              <h2>{resource.title}</h2>
+              <p>{resource.summary}</p>
+              <p>{resource.content}</p>
+              <div className="preview-lines" />
+            </div>
+          )}
         </Card>
         <Card title="AI 摘要与标签">
           <Info label="解析状态" value={resource.parseStatus || "成功"} />
@@ -1574,7 +1852,86 @@ function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resourc
   );
 }
 
-function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { briefOutput: string; setBriefOutput: (value: string) => void; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void }) {
+function SpreadsheetPreview({ spreadsheet, title, summary }: { spreadsheet: SpreadsheetContent; title: string; summary: string }) {
+  return (
+    <div className="spreadsheet-preview">
+      <div className="spreadsheet-hero">
+        <span>Excel 结构化预览</span>
+        <h2>{title}</h2>
+        <p>{summary}</p>
+      </div>
+      {spreadsheet.sheets.map((sheet) => {
+        const entries = spreadsheetEntries(sheet.rows);
+        const importantEntries = importantSpreadsheetEntries(sheet.rows);
+        const sections = spreadsheetSections(sheet.rows);
+        const tableRows = sheet.rows.map(compactRow).filter((row) => row.length);
+        const columnCount = Math.min(6, Math.max(...tableRows.map((row) => row.length), 2));
+        return (
+          <div className="sheet-block" key={sheet.name}>
+            <div className="sheet-heading">
+              <strong>{sheet.name}</strong>
+              <span>{sheet.rowCount ?? sheet.rows.length} 行</span>
+            </div>
+            {importantEntries.length > 0 && (
+              <div className="important-box">
+                <strong>重点信息</strong>
+                <div className="important-list">
+                  {importantEntries.map((entry, index) => (
+                    <div key={`${sheet.name}-important-${entry.label}-${index}`}>
+                      <span>{entry.label}</span>
+                      <p>{entry.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sections.length > 0 ? (
+              <div className="sheet-section-list">
+                {sections.map((section) => (
+                  <div className="sheet-section" key={`${sheet.name}-${section.title}`}>
+                    <h3>{section.title}</h3>
+                    <div className="excel-entry-grid">
+                      {section.entries.map((entry, index) => (
+                        <div className="excel-entry" key={`${section.title}-${entry.label}-${index}`}>
+                          <span>{entry.label}</span>
+                          <p>{entry.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : entries.length > 0 && (
+              <div className="excel-entry-grid">
+                {entries.map((entry, index) => (
+                  <div className="excel-entry" key={`${sheet.name}-${entry.label}-${index}`}>
+                    <span>{entry.label}</span>
+                    <p>{entry.value}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="excel-table-wrap">
+              <table className="excel-preview-table">
+                <tbody>
+                  {tableRows.map((row, rowIndex) => (
+                    <tr key={`${sheet.name}-${rowIndex}`}>
+                      {Array.from({ length: columnCount }, (_, cellIndex) => (
+                        <td key={cellIndex}>{row[cellIndex] || ""}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BriefAssistant({ briefOutput, setBriefOutput, projects, resources, setPage, addJob }: { briefOutput: string; setBriefOutput: (value: string) => void; projects: Project[]; resources: Resource[]; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void }) {
   const [apiConfig, setApiConfig] = usePersistentState<BriefApiConfig>("strategy-center-brief-api-config", {
     endpoint: "",
     apiKey: "",
@@ -1582,6 +1939,10 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
   });
   const [isRunning, setIsRunning] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [parsedFiles, setParsedFiles] = useState<BriefInputFile[]>([]);
+  const [isParsingFiles, setIsParsingFiles] = useState(false);
+  const [fileMessage, setFileMessage] = useState("");
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelMessage, setModelMessage] = useState("");
   const [form, setForm] = useState({
@@ -1592,6 +1953,70 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
     forbidden: "",
     brief: "",
   });
+  const currentInputPackage = useMemo(() => buildCurrentInputPackage(form, parsedFiles), [form, parsedFiles]);
+  const referenceContext = useMemo(() => buildBriefReferenceContext(form, projects, resources, currentInputPackage), [currentInputPackage, form, projects, resources]);
+
+  const addBriefFiles = (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setSelectedFiles((current) => {
+      const next = [...current];
+      Array.from(fileList).forEach((file) => {
+        const exists = next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+        if (!exists) next.push(file);
+      });
+      return next;
+    });
+    setFileMessage("已加入文件，点击解析文件后会读取正文。");
+  };
+
+  const removeBriefFile = (index: number) => {
+    setSelectedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+  };
+
+  const parseBriefFiles = async () => {
+    if (!selectedFiles.length) {
+      setFileMessage("请先选择客户 Brief、QA 或补充资料文件。");
+      return parsedFiles;
+    }
+    setIsParsingFiles(true);
+    setFileMessage("");
+    try {
+      const body = new FormData();
+      selectedFiles.forEach((file) => body.append("files", file));
+      let response = await fetch("/api/brief-files", { method: "POST", body });
+      if (response.status === 404) {
+        const fallbackBody = new FormData();
+        selectedFiles.forEach((file) => fallbackBody.append("files", file));
+        fallbackBody.append("type", "Brief输入");
+        fallbackBody.append("projectType", form.projectType);
+        fallbackBody.append("title", form.projectName || "Brief 输入文件");
+        fallbackBody.append("content", form.brief);
+        response = await fetch("/api/resources/upload", { method: "POST", body: fallbackBody });
+      }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Brief 输入文件解析失败。");
+      const files = (result.files ?? result.resources ?? []).map((item: Partial<BriefInputFile & Resource>) => ({
+        id: item.id ?? Date.now(),
+        name: item.name ?? item.fileName ?? item.title ?? "Brief 输入文件",
+        fileSize: item.fileSize,
+        mimeType: item.mimeType,
+        parseStatus: item.parseStatus === "失败" ? "失败" : "成功",
+        parseError: item.parseError,
+        summary: item.summary ?? summarize(item.content ?? ""),
+        content: item.content ?? "",
+        structuredContent: item.structuredContent,
+      })) as BriefInputFile[];
+      setParsedFiles(files);
+      setFileMessage(`已解析 ${files.length} 个输入文件。`);
+      addJob("Brief 文件解析", `解析 ${files.length} 个客户输入文件`, "方案助手");
+      return files;
+    } catch (error) {
+      setFileMessage(error instanceof Error ? error.message : "Brief 输入文件解析失败。");
+      return parsedFiles;
+    } finally {
+      setIsParsingFiles(false);
+    }
+  };
 
   const loadModels = async () => {
     setIsLoadingModels(true);
@@ -1628,6 +2053,24 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
   const run = async () => {
     setIsRunning(true);
     try {
+      const inputFiles = selectedFiles.length && !parsedFiles.length ? await parseBriefFiles() : parsedFiles;
+      const inputPackage = buildCurrentInputPackage(form, inputFiles);
+      const liveReferenceContext = buildBriefReferenceContext(form, projects, resources, inputPackage);
+      const systemPrompt = `你是游戏营销策略中心的 Brief 解析专家。请基于系统设定流程分析“本次项目输入包”，输入包可能包含客户下发 Brief、QA/答疑、补充资料、附件要求、历史沟通记录。
+
+输出时必须：
+1. 区分客户明确要求、AI 推断、历史参照启发、需要人工确认的信息。
+2. 先综合本次上传文件，再结合历史参照文件，不要只复述单个文件。
+3. 自动识别需求背景、目标、预算、节点、考核标准、排竞/保密、交付物、风险与缺失信息。
+4. 输出客户确认 QA，优先覆盖预算、资源授权、排竞、素材、KOL/达人、效果预估、提交附件和时间节点。
+5. 如历史中标/高复用案例可参考，只提炼结构和策略方法，不把旧项目数据当成当前事实。`;
+      const prompt = `${systemPrompt}
+
+${inputPackage}
+
+请同时参考以下系统自动检索到的历史资料，分析相似需求、历史 QA/答疑、中标或高复用案例，并明确哪些结论来自历史资料、哪些需要人工确认。
+
+${liveReferenceContext.text}`;
       if (apiConfig.endpoint.trim()) {
         setBriefOutput("正在调用 Brief 解析 API...");
         const response = await fetch("/api/brief-run", {
@@ -1638,10 +2081,10 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
             apiKey: apiConfig.apiKey.trim(),
             model: apiConfig.model.trim() || undefined,
             input: form,
-            prompt: buildBriefPrompt(form),
+            prompt,
             messages: [
-              { role: "system", content: "你是游戏营销策略中心的 Brief 需求解构助手。" },
-              { role: "user", content: buildBriefPrompt(form) },
+              { role: "system", content: systemPrompt },
+              { role: "user", content: prompt },
             ],
           }),
         });
@@ -1652,8 +2095,17 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
         addJob("Brief 解析", `${form.projectName || "未命名项目"} Brief API 需求解构`, "方案助手");
         return;
       }
-      setBriefOutput(buildLocalBriefReport(form));
-      addJob("Brief 解析", `${form.projectName || "未命名项目"} Brief 本地需求解构`, "方案助手");
+      setBriefOutput(`${buildBriefReportWithReferences(form, liveReferenceContext.text)}
+
+本次上传文件综合：
+${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name, file.content)}：${file.name}；${file.summary}`).join("\n") : "- 暂无上传文件，当前仅基于手动输入和历史参照生成。"}
+
+客户确认 QA 优先级：
+1. 预算拆分、报价口径、权益明细和效果预估是否已有固定模板？
+2. 是否存在排竞、保密、IP/明星/异业资源使用限制？
+3. 提案附件是否必须包含 PPT、费用表、成功案例、执行排期和数据支撑？
+4. QA/补充资料中未明确的节点、素材、达人范围和审批流程是否需要客户确认？`);
+      addJob("Brief 解析", `${form.projectName || "未命名项目"} Brief 本地需求与历史资料分析`, "方案助手");
     } catch (error) {
       setBriefOutput(error instanceof Error ? error.message : "Brief 解析 API 调用失败。");
     } finally {
@@ -1672,8 +2124,41 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
             <Field label="项目类型" value={form.projectType} onChange={(value) => setForm({ ...form, projectType: value })} />
             <Field label="方案用途" value={form.usage} onChange={(value) => setForm({ ...form, usage: value })} />
           </div>
+          <div className="brief-file-panel">
+            <label className="upload-zone compact-upload">
+              <strong>上传本次项目输入文件</strong>
+              <span>支持客户 Brief、QA、补充资料、Excel、Word、PDF、TXT</span>
+              <input type="file" multiple onChange={(event) => addBriefFiles(event.target.files)} />
+              <em>{selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件` : "点击选择文件"}</em>
+            </label>
+            {selectedFiles.length > 0 && (
+              <div className="file-list">
+                {selectedFiles.map((file, index) => (
+                  <div className="file-item" key={`${file.name}-${file.size}-${file.lastModified}`}>
+                    <span>{file.name}</span>
+                    <button className="link-button danger" onClick={() => removeBriefFile(index)}>移除</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="inline-actions">
+              <button className="ghost-button" onClick={parseBriefFiles} disabled={isParsingFiles}>{isParsingFiles ? "解析中..." : "解析文件"}</button>
+              {fileMessage && <span>{fileMessage}</span>}
+            </div>
+            {parsedFiles.length > 0 && (
+              <div className="brief-input-list">
+                {parsedFiles.map((file) => (
+                  <div className="brief-input-card" key={file.id}>
+                    <strong>{classifyBriefFile(file.name, file.content)}</strong>
+                    <span>{file.name} / {formatFileSize(file.fileSize)} / {file.parseStatus}</span>
+                    <p>{file.summary}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <textarea value={form.forbidden} onChange={(event) => setForm({ ...form, forbidden: event.target.value })} placeholder="禁忌要求，例如：不可使用负面热点、不可过度强调氪金、不可提未确认资源..." />
-          <textarea value={form.brief} onChange={(event) => setForm({ ...form, brief: event.target.value })} placeholder="粘贴客户 Brief 或沟通记录..." />
+          <textarea value={form.brief} onChange={(event) => setForm({ ...form, brief: event.target.value })} placeholder="可选：粘贴额外客户沟通记录、会议纪要或人工补充说明..." />
           <div className="note-box">
             <strong>API 调用接口</strong>
             <p>填写接口地址后会调用外部 Brief 解析 API；留空则使用本地规则生成报告。</p>
@@ -1698,11 +2183,41 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
           </div>
           <button className="primary-button wide" onClick={run} disabled={isRunning}>{isRunning ? "解析中..." : "开始解析"}</button>
         </Card>
-        <Card title="AI 需求解构报告" action={<button className="ghost-button" onClick={() => setPage("outline")}>用于生成大纲</button>}>
-          <pre className="ai-output">{briefOutput || "填写左侧信息后，AI 将在这里输出需求解构、风险点和客户确认 QA。"}</pre>
-        </Card>
+        <div className="stack-panel">
+          <Card title="历史参照检索" action={<span className="soft-pill">自动匹配</span>}>
+            <div className="reference-grid">
+              <ReferenceColumn title="相似历史需求" items={referenceContext.historicalBriefs.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: resource.summary }))} />
+              <ReferenceColumn title="历史 QA / 答疑" items={referenceContext.qaItems.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: summarize(resource.content || resource.summary) }))} />
+              <ReferenceColumn title="中标/高复用案例" items={referenceContext.winningCases.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: resource.summary }))} />
+            </div>
+            <div className="reference-projects">
+              <strong>相关项目经验</strong>
+              {referenceContext.relatedProjects.length ? referenceContext.relatedProjects.map(({ project, score }) => (
+                <span key={project.id}>{project.name} / {project.stage} / 风险 {inferProjectRisk(project)} / 匹配 {score}</span>
+              )) : <span>暂无匹配项目</span>}
+            </div>
+          </Card>
+          <Card title="AI 需求解构报告" action={<button className="ghost-button" onClick={() => setPage("outline")}>用于生成大纲</button>}>
+            <pre className="ai-output">{briefOutput || "填写左侧信息后，AI 将结合历史需求、QA 答疑和中标案例输出需求解构、风险点和客户确认 QA。"}</pre>
+          </Card>
+        </div>
       </div>
     </section>
+  );
+}
+
+function ReferenceColumn({ title, items }: { title: string; items: Array<{ title: string; meta: string; summary: string }> }) {
+  return (
+    <div className="reference-column">
+      <strong>{title}</strong>
+      {items.length ? items.map((item) => (
+        <div className="reference-item" key={`${title}-${item.title}`}>
+          <span>{item.meta}</span>
+          <b>{item.title}</b>
+          <p>{item.summary}</p>
+        </div>
+      )) : <p className="muted">暂无匹配资料</p>}
+    </div>
   );
 }
 
@@ -1770,7 +2285,7 @@ ${briefOutput ? summarize(briefOutput) : "未选择需求解构报告，当前�
   );
 }
 
-function PeopleManagement({ members, setMembers, projects, addJob }: { members: Member[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; projects: Project[]; addJob: (type: string, name: string, source: string) => void }) {
+function PeopleManagement({ members, setMembers, projects, openProject, addJob }: { members: Member[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; projects: Project[]; openProject: (id: number) => void; addJob: (type: string, name: string, source: string) => void }) {
   const [showForm, setShowForm] = useState(false);
   const [advice, setAdvice] = useState("");
   const [form, setForm] = useState({
@@ -1784,6 +2299,46 @@ function PeopleManagement({ members, setMembers, projects, addJob }: { members: 
 
   const taskStats = useMemo(() => {
     return buildMemberLoadStats(members, projects);
+  }, [members, projects]);
+  const assignmentRows = useMemo(() => {
+    return projects.map((project) => {
+      const activeTasks = project.tasks.filter((task) => task.status !== "已完成");
+      const delayedTasks = project.tasks.filter((task) => task.status === "延期");
+      const riskyTasks = project.tasks.filter((task) => {
+        const risk = inferTaskRisk(task, project);
+        return risk === "紧急" || risk === "严重";
+      });
+      const ownerGroups = activeTasks.reduce<Array<{ name: string; count: number; progress: number }>>((groups, task) => {
+        const name = memberName(members, task.ownerId, task.owner);
+        const existing = groups.find((item) => item.name === name);
+        if (existing) {
+          existing.count += 1;
+          existing.progress += task.progress;
+        } else {
+          groups.push({ name, count: 1, progress: task.progress });
+        }
+        return groups;
+      }, []);
+      const collaborators = ownerGroups
+        .map((item) => `${item.name} ${item.count} 项/${Math.round(item.progress / item.count)}%`)
+        .join("；") || "暂无未完成任务";
+      const recommendations = recommendBackupMembers(project, members, projects).slice(0, 3);
+      const nextMilestone = daysUntil(project.submit) <= daysUntil(project.pitch) ? `方案提交 ${project.submit}` : `讲标 ${project.pitch}`;
+      return {
+        project,
+        progress: projectProgress(project),
+        risk: inferProjectRisk(project),
+        activeTasks,
+        delayedTasks,
+        riskyTasks,
+        collaborators,
+        recommendations,
+        nextMilestone,
+      };
+    }).sort((a, b) => {
+      const riskRank: Record<Risk, number> = { 严重: 4, 紧急: 3, 一般: 2, 正常: 1 };
+      return riskRank[b.risk] - riskRank[a.risk] || b.delayedTasks.length - a.delayedTasks.length || a.progress - b.progress;
+    });
   }, [members, projects]);
 
   const addMember = () => {
@@ -1898,6 +2453,60 @@ ${actionLines.join("\n")}
         <Metric label="偏高负载" value={taskStats.filter((item) => item.loadStatus === "偏高" || item.loadStatus === "过载").length} tone="orange" />
         <Metric label="延期任务" value={taskStats.reduce((total, item) => total + item.delayedTasks.length, 0)} tone="red" />
       </div>
+      <Card title="项目人员分工总表" action={<span className="soft-pill">随项目排期自动更新</span>}>
+        <div className="table-scroll">
+          <table className="joined-table">
+            <thead>
+              <tr>
+                <th>项目</th>
+                <th>负责人</th>
+                <th>进度</th>
+                <th>风险</th>
+                <th>当前分工</th>
+                <th>风险任务</th>
+                <th>匹配协助人员</th>
+                <th>下一节点</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assignmentRows.map(({ project, progress, risk, delayedTasks, riskyTasks, collaborators, recommendations, nextMilestone }) => (
+                <tr key={project.id}>
+                  <td>
+                    <strong>{project.name}</strong>
+                    <span className="table-subtext">{project.type} / {project.stage}</span>
+                  </td>
+                  <td>{memberName(members, project.ownerId, project.owner)}</td>
+                  <td>
+                    <div className="table-progress">
+                      <Progress value={progress} />
+                      <span>{progress}%</span>
+                    </div>
+                  </td>
+                  <td><RiskBadge risk={risk} /></td>
+                  <td>{collaborators}</td>
+                  <td>
+                    {riskyTasks.length || delayedTasks.length ? (
+                      <span>{riskyTasks.length} 个高风险 / {delayedTasks.length} 个延期</span>
+                    ) : (
+                      <span className="table-subtext">暂无</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="assist-list">
+                      {recommendations.length ? recommendations.map((item) => (
+                        <span key={item.member.id}>{item.member.name} · {item.loadStatus} · 匹配 {item.matchScore}</span>
+                      )) : <span className="assist-empty">暂无可推荐人员</span>}
+                    </div>
+                  </td>
+                  <td>{nextMilestone}</td>
+                  <td><button className="link-button" onClick={() => openProject(project.id)}>查看排期</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
       {showForm && (
         <Card title="新增成员">
           <div className="form-grid">
@@ -2223,22 +2832,124 @@ function FormGrid({ fields }: { fields: string[] }) {
   );
 }
 
-function Gantt({ tasks, members }: { tasks: ProjectTask[]; members: Member[] }) {
+interface GanttTimelineItem {
+  id: number;
+  title: string;
+  meta: string;
+  start: Date;
+  end: Date;
+  progress: number;
+  status: string;
+  risk: Risk;
+  onClick?: () => void;
+}
+
+function buildTimeline(items: GanttTimelineItem[]) {
+  const starts = items.map((item) => item.start.getTime());
+  const ends = items.map((item) => item.end.getTime());
+  const earliest = starts.length ? new Date(Math.min(...starts)) : new Date(`${today()}T00:00:00`);
+  const latest = ends.length ? new Date(Math.max(...ends)) : addDays(earliest, 6);
+  const paddedStart = addDays(earliest, -1);
+  const paddedEnd = addDays(latest, 1);
+  const totalDays = Math.max(1, daysBetween(paddedStart, paddedEnd));
+  const scale = Array.from({ length: 7 }, (_, index) => formatMonthDay(addDays(paddedStart, Math.round((totalDays * index) / 6))));
+  return { start: paddedStart, totalDays, scale };
+}
+
+function timelineStyle(item: GanttTimelineItem, timeline: ReturnType<typeof buildTimeline>) {
+  const left = clamp((daysBetween(timeline.start, item.start) / timeline.totalDays) * 100, 0, 96);
+  const width = clamp(((daysBetween(item.start, item.end) + 1) / timeline.totalDays) * 100, 4, 100 - left);
+  return { left: `${left}%`, width: `${width}%` };
+}
+
+function projectProgress(project: Project) {
+  if (!project.tasks.length) return 0;
+  return Math.round(project.tasks.reduce((total, task) => total + task.progress, 0) / project.tasks.length);
+}
+
+function projectEndDate(project: Project) {
+  const fallbackYear = project.start.slice(0, 4) || today().slice(0, 4);
+  const taskEnds = project.tasks
+    .map((task) => parseScheduleDate(task.end, fallbackYear))
+    .filter((date): date is Date => Boolean(date));
+  const milestones = [parseScheduleDate(project.submit, fallbackYear), parseScheduleDate(project.pitch, fallbackYear), ...taskEnds].filter((date): date is Date => Boolean(date));
+  if (!milestones.length) return parseScheduleDate(project.start, fallbackYear) ?? new Date(`${today()}T00:00:00`);
+  return new Date(Math.max(...milestones.map((date) => date.getTime())));
+}
+
+function ProjectGanttOverview({ projects, members, openProject }: { projects: Project[]; members: Member[]; openProject: (id: number) => void }) {
+  const items = projects
+    .map((project) => {
+      const fallbackYear = project.start.slice(0, 4) || project.submit.slice(0, 4) || today().slice(0, 4);
+      return {
+        id: project.id,
+        title: project.name,
+        meta: `${project.type} / ${memberName(members, project.ownerId, project.owner)} / ${project.stage}`,
+        start: parseScheduleDate(project.start, fallbackYear) ?? new Date(`${today()}T00:00:00`),
+        end: projectEndDate(project),
+        progress: projectProgress(project),
+        status: project.status,
+        risk: inferProjectRisk(project),
+        onClick: () => openProject(project.id),
+      };
+    })
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const timeline = buildTimeline(items);
+
+  return (
+    <Card title="项目总进度甘特图" action={<span className="soft-pill">共 {items.length} 个项目</span>}>
+      {items.length ? <GanttTimeline items={items} timeline={timeline} /> : <div className="empty-state compact">暂无符合筛选条件的项目</div>}
+    </Card>
+  );
+}
+
+function GanttTimeline({ items, timeline }: { items: GanttTimelineItem[]; timeline: ReturnType<typeof buildTimeline> }) {
+  return (
+    <div className="gantt">
+      <div className="gantt-scale">
+        <span />
+        <div className="gantt-scale-days">
+          {timeline.scale.map((day) => <span key={day}>{day}</span>)}
+        </div>
+      </div>
+      {items.map((item) => {
+        const row = (
+          <>
+            <strong>{item.title}<small>{item.meta}</small></strong>
+            <div className="gantt-track">
+              <span className={item.status === "延期" || item.risk === "紧急" || item.risk === "严重" ? "gantt-bar delayed" : "gantt-bar"} style={timelineStyle(item, timeline)}>
+                {item.progress}%
+              </span>
+            </div>
+          </>
+        );
+        return item.onClick ? (
+          <button className="gantt-row gantt-row-button" key={item.id} onClick={item.onClick}>{row}</button>
+        ) : (
+          <div className="gantt-row" key={item.id}>{row}</div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Gantt({ project, tasks, members }: { project: Project; tasks: ProjectTask[]; members: Member[] }) {
+  const fallbackYear = project.submit.slice(0, 4) || project.start.slice(0, 4) || today().slice(0, 4);
+  const items = tasks.map((task) => ({
+    id: task.id,
+    title: task.name,
+    meta: `${task.phase} / ${memberName(members, task.ownerId, task.owner)}`,
+    start: parseScheduleDate(task.start, fallbackYear) ?? parseScheduleDate(project.start, fallbackYear) ?? new Date(`${today()}T00:00:00`),
+    end: parseScheduleDate(task.end, fallbackYear) ?? parseScheduleDate(project.submit, fallbackYear) ?? new Date(`${today()}T00:00:00`),
+    progress: task.progress,
+    status: task.status,
+    risk: inferTaskRisk(task, project),
+  }));
+  const timeline = buildTimeline(items);
+
   return (
     <Card title="甘特图">
-      <div className="gantt">
-        <div className="gantt-scale">
-          {["04-29", "05-01", "05-03", "05-05", "05-07", "05-09", "05-11"].map((day) => <span key={day}>{day}</span>)}
-        </div>
-        {tasks.map((task, index) => (
-          <div className="gantt-row" key={task.id}>
-            <strong>{task.name}</strong>
-            <div className="gantt-track">
-              <span className={task.status === "延期" ? "gantt-bar delayed" : "gantt-bar"} style={{ left: `${index * 12 + 4}%`, width: "28%" }}>{memberName(members, task.ownerId, task.owner)}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+      {items.length ? <GanttTimeline items={items} timeline={timeline} /> : <div className="empty-state compact">暂无排期任务</div>}
     </Card>
   );
 }

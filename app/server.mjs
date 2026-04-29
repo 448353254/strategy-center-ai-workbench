@@ -234,26 +234,53 @@ function firstField(fields, key, fallback = "") {
   return Array.isArray(value) ? String(value[0] ?? fallback) : String(value ?? fallback);
 }
 
-async function extractText(file) {
+function cleanSpreadsheetRows(rows) {
+  return rows
+    .map((row) => row.map((cell) => String(cell ?? "").trim()))
+    .filter((row) => row.some(Boolean));
+}
+
+function rowToReadableLine(row) {
+  const cells = row.filter(Boolean);
+  if (!cells.length) return "";
+  if (cells.length >= 2) return `- ${cells[0]}：${cells.slice(1).join(" / ")}`;
+  return `- ${cells[0]}`;
+}
+
+function extractSpreadsheet(filePath) {
+  const workbook = xlsx.readFile(filePath);
+  const sheets = workbook.SheetNames.map((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = cleanSpreadsheetRows(xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }));
+    const previewRows = rows.slice(0, 300);
+    const readable = previewRows.map(rowToReadableLine).filter(Boolean).join("\n");
+    return {
+      name: sheetName,
+      rows: previewRows,
+      rowCount: rows.length,
+      text: readable,
+    };
+  });
+  const text = sheets.map((sheet) => `# ${sheet.name}\n${sheet.text}`).join("\n\n");
+  return { text, structured: { kind: "spreadsheet", sheets } };
+}
+
+async function extractFileContent(file) {
   const originalName = file.originalFilename || "未命名文件";
   const extension = extname(originalName).toLowerCase();
   const filePath = file.filepath;
 
   if ([".txt", ".md", ".csv"].includes(extension)) {
-    return await readFile(filePath, "utf8");
+    return { text: await readFile(filePath, "utf8") };
   }
 
   if (extension === ".docx") {
     const result = await mammoth.extractRawText({ path: filePath });
-    return result.value;
+    return { text: result.value };
   }
 
   if ([".xlsx", ".xls"].includes(extension)) {
-    const workbook = xlsx.readFile(filePath);
-    return workbook.SheetNames.map((sheetName) => {
-      const sheet = workbook.Sheets[sheetName];
-      return `# ${sheetName}\n${xlsx.utils.sheet_to_csv(sheet)}`;
-    }).join("\n\n");
+    return extractSpreadsheet(filePath);
   }
 
   if (extension === ".pdf") {
@@ -261,7 +288,7 @@ async function extractText(file) {
     const parser = new PDFParse({ data: buffer });
     try {
       const result = await parser.getText();
-      return result.text;
+      return { text: result.text };
     } finally {
       await parser.destroy();
     }
@@ -294,11 +321,14 @@ async function handleResourceUpload(req, res) {
   const resources = await Promise.all(uploaded.map(async (file, index) => {
     const originalName = file.originalFilename || `上传文件-${index + 1}`;
     let parsedText = "";
+    let structuredContent;
     let parseStatus = "成功";
     let parseError = "";
 
     try {
-      parsedText = await extractText(file);
+      const extracted = await extractFileContent(file);
+      parsedText = extracted.text;
+      structuredContent = extracted.structured;
     } catch (error) {
       parseStatus = "失败";
       parseError = error instanceof Error ? error.message : "文件解析失败。";
@@ -334,11 +364,52 @@ async function handleResourceUpload(req, res) {
       mimeType: file.mimetype || "",
       parseStatus,
       parseError,
+      structuredContent,
     };
     return { ...resource, chunks: buildResourceChunks(resource) };
   }));
 
   sendJson(res, 200, { resources });
+}
+
+async function handleBriefFiles(req, res) {
+  await mkdir(uploadDir, { recursive: true });
+  const { files } = await parseForm(req);
+  const uploaded = files.files ? (Array.isArray(files.files) ? files.files : [files.files]) : [];
+  if (!uploaded.length) {
+    sendJson(res, 400, { error: "没有收到 Brief 解析文件。" });
+    return;
+  }
+
+  const parsedFiles = await Promise.all(uploaded.map(async (file, index) => {
+    const originalName = file.originalFilename || `Brief输入文件-${index + 1}`;
+    let content = "";
+    let structuredContent;
+    let parseStatus = "成功";
+    let parseError = "";
+    try {
+      const extracted = await extractFileContent(file);
+      content = extracted.text;
+      structuredContent = extracted.structured;
+    } catch (error) {
+      parseStatus = "失败";
+      parseError = error instanceof Error ? error.message : "文件解析失败。";
+    }
+    return {
+      id: Date.now() + index,
+      name: originalName,
+      filePath: normalize(file.filepath),
+      fileSize: file.size,
+      mimeType: file.mimetype || "",
+      parseStatus,
+      parseError,
+      summary: summarize(content),
+      content,
+      structuredContent,
+    };
+  }));
+
+  sendJson(res, 200, { files: parsedFiles });
 }
 
 async function handleResourceSearch(req, res) {
@@ -508,6 +579,11 @@ createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/brief-run") {
       await handleBriefRun(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/brief-files") {
+      await handleBriefFiles(req, res);
       return;
     }
 
