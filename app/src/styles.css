@@ -220,6 +220,12 @@ textarea {
   gap: 12px;
 }
 
+.audit-entry-button {
+  color: #173e67;
+  border-color: rgba(49, 95, 143, 0.18);
+  background: linear-gradient(135deg, rgba(214, 233, 247, 0.95), rgba(237, 247, 255, 0.92));
+}
+
 .avatar {
   display: grid;
   width: 46px;
@@ -430,7 +436,7 @@ textarea {
 
 .quick-panel {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -442,6 +448,11 @@ textarea {
   background: linear-gradient(135deg, #17212b, #315f8f);
   font-size: 16px;
   font-weight: 900;
+}
+
+.quick-panel-audit {
+  background: linear-gradient(135deg, #315f8f, #5f8fba) !important;
+  box-shadow: 0 14px 28px rgba(49, 95, 143, 0.22);
 }
 
 .filter-bar {
@@ -1063,6 +1074,316 @@ textarea {
 .outline-item p {
   margin: 6px 0 0;
   color: var(--muted);
+}
+
+.template-hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+  align-items: center;
+  padding: 18px 20px;
+  border: 1px solid rgba(23, 33, 43, 0.08);
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255, 248, 227, 0.94), rgba(235, 244, 241, 0.9));
+}
+
+.template-kicker {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: #8a6218;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.template-hero h3 {
+  margin: 0 0 6px;
+  font-size: 26px;
+}
+
+.template-count {
+  min-width: 118px;
+  padding: 16px;
+  border-radius: 22px;
+  text-align: center;
+  background: rgba(23, 33, 43, 0.92);
+}
+
+.template-count strong,
+.template-count span {
+  display: block;
+}
+
+.template-count strong {
+  color: white;
+  font-size: 36px;
+  line-height: 1;
+}
+
+.template-count span {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.template-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.template-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.template-list li + li {
+  margin-top: 8px;
+}
+
+.template-slide-list {
+  max-height: 980px;
+}
+
+.template-slide {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.template-slide-header {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.template-slide-header span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 12px;
+  color: white;
+  background: linear-gradient(135deg, #17212b, #315f8f);
+  font-weight: 900;
+}
+
+.template-slide-header strong {
+  display: block;
+  font-size: 18px;
+}
+
+.template-slide-header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.template-slide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.template-slide-section {
+  min-height: 100%;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(238, 243, 239, 0.82);
+}
+
+.template-slide-section h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.template-slide-section .template-list {
+  margin-top: 10px;
+}
+
+.compact-note {
+  margin-top: 14px;
+  background: rgba(47, 125, 91, 0.06);
+}
+
+.audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.audit-stat {
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(23, 33, 43, 0.08);
+}
+
+.audit-stat span,
+.audit-stat strong {
+  display: block;
+}
+
+.audit-stat span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.audit-stat strong {
+  margin-top: 8px;
+  font-size: 34px;
+  line-height: 1;
+}
+
+.audit-stat.severe {
+  background: rgba(179, 68, 62, 0.09);
+}
+
+.audit-stat.general {
+  background: rgba(214, 167, 72, 0.14);
+}
+
+.audit-stat.suggestion {
+  background: rgba(49, 95, 143, 0.1);
+}
+
+.audit-section-list {
+  max-height: 980px;
+}
+
+.audit-section {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.audit-section-header strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 18px;
+}
+
+.audit-section-header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.audit-status {
+  color: white !important;
+  background: #17212b !important;
+}
+
+.audit-status.danger {
+  background: var(--red) !important;
+}
+
+.audit-status.warning {
+  color: #8a6218 !important;
+  background: rgba(214, 167, 72, 0.22) !important;
+}
+
+.audit-status.suggestion {
+  background: rgba(49, 95, 143, 0.82) !important;
+}
+
+.audit-status.success {
+  background: rgba(47, 125, 91, 0.9) !important;
+}
+
+.finding-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.finding-card {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(23, 33, 43, 0.08);
+  background: rgba(246, 248, 247, 0.92);
+}
+
+.finding-card.danger {
+  border-color: rgba(179, 68, 62, 0.2);
+  background: rgba(179, 68, 62, 0.07);
+}
+
+.finding-card.warning {
+  border-color: rgba(214, 167, 72, 0.26);
+  background: rgba(214, 167, 72, 0.1);
+}
+
+.finding-card.suggestion {
+  border-color: rgba(49, 95, 143, 0.18);
+  background: rgba(49, 95, 143, 0.07);
+}
+
+.finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.finding-badge,
+.finding-category {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.finding-badge {
+  color: white;
+  background: #17212b;
+}
+
+.finding-badge.danger {
+  background: var(--red);
+}
+
+.finding-badge.warning {
+  color: #8a6218;
+  background: rgba(214, 167, 72, 0.24);
+}
+
+.finding-badge.suggestion {
+  background: rgba(49, 95, 143, 0.86);
+}
+
+.finding-category {
+  color: var(--muted);
+  background: rgba(23, 33, 43, 0.06);
+}
+
+.finding-card strong {
+  display: block;
+  font-size: 16px;
+}
+
+.finding-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.finding-suggestion {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(23, 33, 43, 0.08);
+  color: #31404e;
+  line-height: 1.7;
 }
 
 .gantt {

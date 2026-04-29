@@ -15,6 +15,8 @@ type Page =
   | "aiJobs"
   | "settings";
 
+type OutlineTab = "template" | "audit";
+
 type Risk = "正常" | "一般" | "紧急" | "严重";
 type TaskStatus = "未开始" | "进行中" | "已完成" | "延期" | "暂停";
 type Priority = "P1" | "P2" | "P3";
@@ -109,6 +111,76 @@ interface SearchSettings {
   embeddingEndpoint: string;
   embeddingApiKey: string;
   embeddingModel: string;
+}
+
+interface TemplateSlide {
+  id: string;
+  module: string;
+  title: string;
+  objective: string;
+  editableBlocks: string[];
+  layoutTips: string[];
+  visualTips: string[];
+  contentPrompts: string[];
+  highlightTips: string[];
+}
+
+interface OutlineTemplatePlan {
+  version: "ppt-template-v1";
+  title: string;
+  projectType: string;
+  usage: string;
+  visualStyle: string;
+  visualKeywords: string[];
+  storytelling: string;
+  editableGuide: string;
+  optimizationSuggestions: string[];
+  referenceAssets: string[];
+  slides: TemplateSlide[];
+}
+
+type AuditSeverity = "严重问题" | "一般问题" | "优化建议";
+type AuditCategory = "需求匹配度" | "逻辑连贯性" | "数据准确性" | "结构完整性" | "表达完整性";
+
+interface AuditFinding {
+  id: string;
+  severity: AuditSeverity;
+  category: AuditCategory;
+  issue: string;
+  detail: string;
+  suggestion: string;
+}
+
+interface AuditSectionReport {
+  id: string;
+  title: string;
+  module: string;
+  status: "高风险" | "需调整" | "可优化" | "通过";
+  summary: string;
+  findings: AuditFinding[];
+}
+
+interface ContentAuditReport {
+  version: "content-audit-v1";
+  title: string;
+  requirements: string[];
+  briefSummary: string;
+  overallSummary: string;
+  totals: {
+    severe: number;
+    general: number;
+    suggestion: number;
+  };
+  overallSuggestions: string[];
+  sections: AuditSectionReport[];
+}
+
+interface ParsedAuditSection {
+  id: string;
+  title: string;
+  module: string;
+  body: string;
+  searchable: string;
 }
 
 const initialTasks: ProjectTask[] = [
@@ -399,6 +471,857 @@ AI 标签：
 ${tags.join("、")}`;
 }
 
+function splitTokens(value: string) {
+  return value
+    .split(/[、，,\/|｜\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parsePageRange(value: string) {
+  const matched = value.match(/(\d+)\s*[-~—至]+\s*(\d+)/);
+  if (matched) {
+    const min = Number(matched[1]);
+    const max = Number(matched[2]);
+    if (Number.isFinite(min) && Number.isFinite(max)) {
+      const lower = Math.min(min, max);
+      const upper = Math.max(min, max);
+      return { min: lower, max: upper, target: Math.round((lower + upper) / 2) };
+    }
+  }
+  const single = Number(value.match(/\d+/)?.[0] || 12);
+  return { min: single, max: single, target: single };
+}
+
+function extractBriefField(briefOutput: string, label: string) {
+  const matched = briefOutput.match(new RegExp(`${label}[:：]\\s*([^\\n]+)`));
+  return matched?.[1]?.trim() || "";
+}
+
+function inferProjectType(text: string) {
+  if (text.includes("新品上线")) return "新品上线";
+  if (text.includes("活动推广")) return "活动推广";
+  if (text.includes("整合营销")) return "整合营销";
+  if (text.includes("品牌") && text.includes("campaign")) return "品牌传播";
+  if (text.includes("投标")) return "投标提案";
+  return "游戏营销方案";
+}
+
+function inferUsage(text: string) {
+  if (text.includes("投标")) return "投标";
+  if (text.includes("讲标")) return "讲标";
+  if (text.includes("比稿")) return "比稿";
+  if (text.includes("内部汇报")) return "内部汇报";
+  return "方案提案";
+}
+
+function inferVisualDirection(text: string, tone: string, preference: string) {
+  const combined = `${text} ${tone} ${preference}`;
+  if (combined.includes("篮球") || combined.includes("街球") || combined.includes("体育")) {
+    return {
+      style: "热血赛场动势风",
+      keywords: ["动作定格", "黑金撞电光蓝", "计分牌数据卡", "斜切分镜"],
+    };
+  }
+  if (combined.includes("二次元") || combined.includes("角色") || combined.includes("番")) {
+    return {
+      style: "高饱和角色海报风",
+      keywords: ["角色立绘", "霓虹描边", "高对比渐变", "卡面式信息层"],
+    };
+  }
+  if (combined.includes("女性向") || combined.includes("恋爱") || combined.includes("剧情")) {
+    return {
+      style: "情绪氛围叙事风",
+      keywords: ["柔光立绘", "留白排版", "长条信息卡", "情绪色分层"],
+    };
+  }
+  if (combined.includes("科幻") || combined.includes("未来") || combined.includes("机甲")) {
+    return {
+      style: "未来界面 HUD 风",
+      keywords: ["深色宇宙背景", "能量线框", "模块化悬浮面板", "发光数据图层"],
+    };
+  }
+  return {
+    style: "游戏 KV 沉浸提案风",
+    keywords: ["游戏原画大底", "半透明内容卡", "重点结论标签", "图标辅助数据"],
+  };
+}
+
+function normalizeModules(modules: string) {
+  const mapped = splitTokens(modules).map((item) => {
+    if (item.includes("背景") || item.includes("需求")) return "背景";
+    if (item.includes("洞察") || item.includes("市场") || item.includes("用户") || item.includes("竞品")) return "洞察";
+    if (item.includes("策略")) return "策略";
+    if (item.includes("创意") || item.includes("传播")) return "创意";
+    if (item.includes("执行") || item.includes("落地") || item.includes("资源")) return "执行";
+    if (item.includes("预算")) return "预算";
+    if (item.includes("排期") || item.includes("节奏") || item.includes("时间")) return "排期";
+    if (item.includes("风险") || item.includes("预案")) return "风险";
+    return item;
+  });
+  return Array.from(new Set(mapped));
+}
+
+function createTemplateSlide(config: TemplateSlide): TemplateSlide {
+  return config;
+}
+
+function buildTemplatePlan(
+  form: { tone: string; pageRange: string; modules: string; preference: string },
+  briefOutput: string,
+  resources: Resource[],
+) {
+  const projectType = extractBriefField(briefOutput, "项目类型") || inferProjectType(briefOutput);
+  const usage = extractBriefField(briefOutput, "方案用途") || inferUsage(briefOutput);
+  const gameName = extractBriefField(briefOutput, "游戏") || extractBriefField(briefOutput, "游戏名称") || "目标游戏";
+  const { style, keywords } = inferVisualDirection(`${gameName} ${briefOutput}`, form.tone, form.preference);
+  const modules = normalizeModules(form.modules);
+  const targetRange = parsePageRange(form.pageRange);
+  const referenceAssets = resources.slice(0, 4).map((resource) => resource.title);
+  const keyNeed = briefOutput ? summarize(briefOutput) : `围绕 ${gameName} 输出清晰、好讲、能落地的方案模板。`;
+  const slides: TemplateSlide[] = [
+    createTemplateSlide({
+      id: "cover",
+      module: "封面",
+      title: `${gameName} ${projectType}方案封面`,
+      objective: "用一句提案主张 + 游戏视觉第一时间建立专业感和风格统一。",
+      editableBlocks: ["主标题", "副标题/一句话主张", "提案时间与团队署名", "游戏 KV 主视觉位"],
+      layoutTips: ["标题放左上或中上，确保 3 秒内读完。", "主视觉占页面 60%-70%，文字只保留最关键的信息。", "底部预留客户名称、提案阶段、版本号等编辑位。"],
+      visualTips: [`使用${style}，首页直接上游戏主画面或角色群像。`, `关键词建议：${keywords.join("、")}。`, "标题区增加细线、角标或徽章强化提案质感。"],
+      contentPrompts: [`一句话写清本次方案要解决的业务目标。`, `副标题补充项目类型、阶段或核心卖点，如“暑期版本整合营销提案”。`, "封面不要堆信息，只保留客户最在意的提案身份。"],
+      highlightTips: ["封面重点不是介绍自己，而是让客户立刻感知项目调性和方案方向。"],
+    }),
+    createTemplateSlide({
+      id: "contents",
+      module: "目录",
+      title: "目录与提案路径",
+      objective: "让客户提前知道整份 PPT 的推进顺序，降低理解成本。",
+      editableBlocks: ["章节列表", "章节编号", "每章一句目标说明"],
+      layoutTips: ["左侧放章节编号，右侧放章节名和一句简短说明。", "目录尽量控制在 6-8 个一级章节，避免过细。", "当前讲解章节可用高亮色或图标标记。"],
+      visualTips: ["目录页背景适度弱化，可使用模糊化游戏场景图。", "用章节图标辅助识别：洞察、策略、创意、执行、预算分别用不同小图形。"],
+      contentPrompts: ["目录要与后续真实页序一致，便于讲标时来回跳转。", "每章描述尽量以客户价值表达，如“先看机会，再看打法，再看落地”。"],
+      highlightTips: ["目录页重点是清晰，不要在这里堆砌创意文案。"],
+    }),
+  ];
+
+  const moduleSlideMap: Record<string, TemplateSlide[]> = {
+    背景: [
+      createTemplateSlide({
+        id: "context",
+        module: "背景",
+        title: "项目背景与需求定义",
+        objective: "用一页讲清项目现状、目标和本次提案边界。",
+        editableBlocks: ["项目现状 3 点", "核心目标 2-3 点", "本次提案范围", "已知限制条件"],
+        layoutTips: ["建议 4:6 左右分栏，左边写背景，右边写目标/挑战。", "顶部放一句核心结论，正文区用 3-4 张信息卡展开。", "复杂背景不要长段落，改成时间节点或要点列表。"],
+        visualTips: ["背景图可用游戏世界观场景、版本 KV 或运营节点海报。", "挑战项用警示色标签点出，目标项用高亮数字或勾选图标强化。"],
+        contentPrompts: ["项目背景页：简要说明游戏现状、市场环境、项目初衷。", `把“${keyNeed}”拆成客户明确说过的需求与我们推断出的重点。`, "补充客户已有资源、排竞限制、节点时间等关键信息。"],
+        highlightTips: ["这一页要让后面的策略“有来由”，不要只写事实，不写问题。"],
+      }),
+    ],
+    洞察: [
+      createTemplateSlide({
+        id: "insight-market",
+        module: "洞察",
+        title: "市场与用户洞察",
+        objective: "证明为什么现在值得做、为什么要这样做。",
+        editableBlocks: ["市场趋势 2-3 条", "目标用户画像", "用户痛点/兴趣点", "可引用的数据或访谈观点"],
+        layoutTips: ["建议顶部一句结论，下面做三栏：市场、用户、机会。", "数据尽量图表化，避免整页文字。", "如果数据较少，可用“观察 + 推论 + 对应策略含义”的格式。"],
+        visualTips: ["数据展示优先卡片、条形图、关键词云，不要使用密集表格。", "可以加入角色头像、圈层标签、场景截图强化用户具象感。"],
+        contentPrompts: ["市场洞察页：说明赛道热度、玩家关注点、竞品动作带来的机会窗口。", "用户洞察页：写清目标玩家是谁、被什么打动、在什么场景容易传播。", "若无现成数据，至少给出基于资料库或经验的结构化判断。"],
+        highlightTips: ["洞察页重点是产出结论，不是把调研素材原样搬上来。"],
+      }),
+      createTemplateSlide({
+        id: "insight-competition",
+        module: "洞察",
+        title: "竞品格局与机会切口",
+        objective: "帮助客户理解我们要避开什么、抢什么、差异化放在哪里。",
+        editableBlocks: ["竞品列表", "对比维度", "机会切口", "我方差异化结论"],
+        layoutTips: ["推荐用 2x2 机会矩阵或 3 列竞品对比表。", "最右侧单独留出“我们的机会”总结区。", "对比维度控制在 4-5 个，避免过满。"],
+        visualTips: ["竞品信息用统一卡片格式呈现，避免截图大小不一。", "机会结论区可加箭头、放大镜或雷达图样式强化决策感。"],
+        contentPrompts: ["竞品页：说明主要对标对象、它们的传播打法、可借鉴点与避坑点。", "机会分析页：指出本项目最值得放大的卖点、人群或事件抓手。"],
+        highlightTips: ["一定要得出“我们该怎么做”的结论，而不是停留在竞品事实罗列。"],
+      }),
+    ],
+    策略: [
+      createTemplateSlide({
+        id: "strategy-core",
+        module: "策略",
+        title: "核心策略总览",
+        objective: "把复杂方案压缩成一句总策略和 3 个支撑抓手。",
+        editableBlocks: ["一句总策略", "策略支柱 3 项", "策略如何回应需求", "成效判断方式"],
+        layoutTips: ["中间放一句大标题式策略结论，四周或下方拆三大抓手。", "每个抓手用“抓什么 + 为什么 + 怎么做”三行结构。", "尽量一页只讲一个核心逻辑。"],
+        visualTips: ["可用中心辐射图、金字塔图或三段式结构图。", "策略支柱建议搭配游戏元素图标，如角色、赛事、社群、福利。"],
+        contentPrompts: ["核心策略页：回答“我们为什么这样打”。", "每个策略抓手都要明确与客户目标、用户洞察之间的连接。", "若是投标场景，补一句这套策略为什么更适合该客户当前阶段。"],
+        highlightTips: ["策略页要像“提案中心句”，讲完这一页客户就该知道整份方案的主脑。"],
+      }),
+      createTemplateSlide({
+        id: "strategy-pillars",
+        module: "策略",
+        title: "策略抓手拆解",
+        objective: "把核心策略进一步拆成可执行的传播/内容/资源打法。",
+        editableBlocks: ["抓手名称", "执行动作", "承接节点", "预期作用"],
+        layoutTips: ["一页 3-4 张抓手卡片，每张卡片对应一个动作模块。", "卡片之间要有清晰层级，可标注“主攻/辅助/兜底”。"],
+        visualTips: ["使用流程箭头、步骤条或模块图来表现承接关系。", "不同抓手可用不同辅助色，但整体仍需维持统一模板风格。"],
+        contentPrompts: ["把策略拆成客户能立刻理解的动作语言，如“先造势、再放大、再转化”。", "每个抓手都补一句落地方式，避免停留在概念层。"],
+        highlightTips: ["优先突出主抓手，不要让所有动作看起来同等重要。"],
+      }),
+    ],
+    创意: [
+      createTemplateSlide({
+        id: "creative-theme",
+        module: "创意",
+        title: "创意主题与视觉概念",
+        objective: "把策略翻译成客户能感知的创意主题、主视觉和内容母题。",
+        editableBlocks: ["创意主题名", "主题阐释", "主视觉灵感", "可延展口号/标签"],
+        layoutTips: ["页面中心放主题口号，左右补充视觉概念和延展说明。", "主视觉图建议占比过半，文字保持短促。"],
+        visualTips: ["大面积使用游戏画面、角色立绘、技能特效或场景图作为氛围底。", "把主题字做成接近 campaign key visual 的呈现，增强提案完成度。"],
+        contentPrompts: ["创意主题页：说明为什么这个主题适合游戏、适合当下版本、适合目标玩家。", "列出 2-3 个可延展的传播关键词，便于后续内容统一。"],
+        highlightTips: ["创意页要有记忆点，但不要牺牲可读性。主题解释一定要能落回业务目标。"],
+      }),
+      createTemplateSlide({
+        id: "creative-play",
+        module: "创意",
+        title: "传播玩法与内容机制",
+        objective: "把创意概念落到玩家会看到什么、会参与什么、会传播什么。",
+        editableBlocks: ["玩法名称", "触发节点", "内容载体", "扩散机制", "预期效果"],
+        layoutTips: ["推荐 3 列玩法卡片或一条传播节奏链路。", "如果玩法多，按“主事件 / 配套内容 / 长尾延展”分层。"],
+        visualTips: ["玩法示意可以用 mockup、社媒信息流示意、活动页面框架图。", "核心数据或传播目标可搭配图标/数字块强化。"],
+        contentPrompts: ["玩法页：说明每个传播动作服务于什么传播目的。", "补充适合的渠道阵地、达人/KOL 类型、UGC 触发方式。", "若涉及版本节点，可把玩法与节点并排展示。"],
+        highlightTips: ["重点不是玩法数量，而是主玩法是否足够出圈且可执行。"],
+      }),
+    ],
+    执行: [
+      createTemplateSlide({
+        id: "execution-plan",
+        module: "执行",
+        title: "执行规划与内容矩阵",
+        objective: "说明团队将如何把策略和创意拆成实际执行动作。",
+        editableBlocks: ["工作流模块", "阵地分工", "内容类型", "负责人/协同说明"],
+        layoutTips: ["建议按渠道、内容、资源、协同四块排版。", "上半区讲内容矩阵，下半区讲执行协同会更清晰。"],
+        visualTips: ["可加入平台图标、内容封面 mockup、流程箭头。", "用不同底色区分“主阵地 / 配合阵地 / 支撑资源”。"],
+        contentPrompts: ["执行页：说明不同平台各自承担什么角色。", "内容矩阵页：按预热、爆发、延续三个阶段对应内容形式。", "若客户偏好务实风，这一页建议多给执行动作而少讲概念。"],
+        highlightTips: ["执行规划要体现“有人做、做什么、什么时候做、如何协同”。"],
+      }),
+      createTemplateSlide({
+        id: "execution-resource",
+        module: "执行",
+        title: "资源配置与协同机制",
+        objective: "增强客户对落地能力和资源整合能力的信任。",
+        editableBlocks: ["核心资源位", "内外部协同链路", "审批/回合节奏", "备选方案"],
+        layoutTips: ["左边讲资源分层，右边讲协同流程。", "如果是投标，可单独留一块写供应商/团队优势。"],
+        visualTips: ["用泳道图或流程条表示多团队协同。", "关键资源位可用徽章、标签和优先级色标识。"],
+        contentPrompts: ["资源页：说明哪些资源必须拿到、哪些资源可作为加分项。", "协同页：写清客户、代理、设计、媒介、执行之间的交付节奏。"],
+        highlightTips: ["这页重点是降低客户对执行失控的担心。"],
+      }),
+    ],
+    预算: [
+      createTemplateSlide({
+        id: "budget",
+        module: "预算",
+        title: "预算拆分与效果预估",
+        objective: "把钱花在哪里、为什么这么花、预期能带来什么说清楚。",
+        editableBlocks: ["预算大类", "核心成本拆分", "投放/制作占比", "KPI 或 ROI 预估"],
+        layoutTips: ["左侧用环图或堆叠柱图展示预算占比，右侧用表格补明细。", "预算页必须留足数字区域，减少大段说明文字。"],
+        visualTips: ["预算类页面适合搭配简洁图标和高对比数字块，背景不宜过花。", "关键预算项可加色条或标签突出。"],
+        contentPrompts: ["预算页需突出核心成本拆分，说明主要投入放在哪些环节。", "效果预估页：补充曝光、互动、转化或 CPM 等客户最关心指标。", "若无法给准数，可先给区间和测算逻辑。"],
+        highlightTips: ["重点不是列全所有费用，而是解释投入逻辑和优先级。"],
+      }),
+    ],
+    排期: [
+      createTemplateSlide({
+        id: "timeline",
+        module: "排期",
+        title: "项目排期与关键里程碑",
+        objective: "让客户确认每一步在什么时候发生、哪些节点不能错过。",
+        editableBlocks: ["时间轴", "里程碑", "版本/活动节点", "交付物说明"],
+        layoutTips: ["建议使用横向时间轴或甘特图，节点不超过 7 个大段。", "重要节点单独加放大提示框，例如首曝、上线、周年庆、提案回合。"],
+        visualTips: ["时间轴可结合游戏版本图标、节日符号、内容封面。", "关键节点用高亮色或发光边框，与普通节点区分。"],
+        contentPrompts: ["排期页：简要说明每个阶段的目标、主要动作和交付结果。", "如果是版本传播，务必把版本节点和传播节点对齐展示。"],
+        highlightTips: ["排期页重点是节奏感和可执行性，不要只给日期不给动作。"],
+      }),
+    ],
+    风险: [
+      createTemplateSlide({
+        id: "risk",
+        module: "风险",
+        title: "风险预案与兜底机制",
+        objective: "提前回答客户可能担心的舆情、执行、排期、资源和预算风险。",
+        editableBlocks: ["风险类别", "触发场景", "应对动作", "负责人/备选方案"],
+        layoutTips: ["推荐用两栏风险矩阵：左边风险，右边应对。", "也可以按高/中/低风险分层，避免所有风险同级。"],
+        visualTips: ["风险页适合使用警示色角标，但整体不要过于压抑。", "每个风险项可配小图标帮助快速扫描。"],
+        contentPrompts: ["风险页：列出最有可能被客户问到的 3-5 个风险点。", "应对措施尽量写成动作，而不是空泛态度。", "若存在资源未确认、节点紧张、竞品干扰等情况，要明确写出备选方案。"],
+        highlightTips: ["重点不是展示风险多专业，而是让客户放心方案有兜底。"],
+      }),
+    ],
+  };
+
+  modules.forEach((module) => {
+    slides.push(...(moduleSlideMap[module] || []));
+  });
+
+  const optionalSlides: TemplateSlide[] = [
+    createTemplateSlide({
+      id: "need-summary",
+      module: "背景",
+      title: "客户需求拆解与成功标准",
+      objective: "把客户显性需求、隐性诉求和成功标准拆清楚。",
+      editableBlocks: ["显性需求", "隐性诉求", "成功标准", "客户确认项"],
+      layoutTips: ["左边列需求，右边列成功标准与待确认事项。", "使用“已知 / 推断 / 待确认”三段结构最清晰。"],
+      visualTips: ["视觉尽量克制，以信息清晰为主，可加入勾选、问号、风险提示图标。"],
+      contentPrompts: ["说明客户明确提出了什么、默认期待什么、还需要追问什么。", "这一页适合放在目录后，帮助客户快速对齐。"],
+      highlightTips: ["特别适合投标和讲标场景，可减少客户会后补充问题。"],
+    }),
+    createTemplateSlide({
+      id: "data-proof",
+      module: "洞察",
+      title: "数据验证与案例背书",
+      objective: "用行业数据、过往案例或资料库内容提升方案可信度。",
+      editableBlocks: ["数据来源", "案例摘要", "关键结论", "可复用启发"],
+      layoutTips: ["左侧数据结论，右侧案例卡片或图表。", "控制案例数量在 2-3 个，重点说为什么相关。"],
+      visualTips: ["案例页适合加封面缩略图、项目标签、结果数字。", "数据页用高对比数字卡强化可信度。"],
+      contentPrompts: ["说明过往案例如何支撑当前提案判断。", "补充和本项目最相关的成功经验或避坑提醒。"],
+      highlightTips: ["客户更关心“为什么这个案例对我有用”，不是案例数量。"],
+    }),
+    createTemplateSlide({
+      id: "team",
+      module: "执行",
+      title: "团队配置与提案保障",
+      objective: "补足客户对项目推进稳定性和协作质量的信心。",
+      editableBlocks: ["项目核心成员", "分工说明", "协作机制", "响应承诺"],
+      layoutTips: ["推荐头像/岗位卡片 + 协作流程图。", "重点成员不要超过 5 位，保持聚焦。"],
+      visualTips: ["可加入岗位图标、职责标签、服务流程节点。", "整体风格保持专业稳健，避免花哨。"],
+      contentPrompts: ["说明谁负责策略、谁负责创意、谁负责执行、谁对接客户。", "如果是投标，补充过往相关经验和快速响应机制。"],
+      highlightTips: ["这页的价值在于“让客户放心把项目交给你”。"],
+    }),
+    createTemplateSlide({
+      id: "appendix",
+      module: "附录",
+      title: "附录与备份页建议",
+      objective: "预留讲标时可能临时被追问的内容，提升整套模板的可编辑性。",
+      editableBlocks: ["可选备份页清单", "数据明细", "参考资料", "额外案例"],
+      layoutTips: ["附录页尽量模板化，便于后续复制和替换内容。", "可以先给常见备份页目录，不一定全部展开。"],
+      visualTips: ["附录页可弱化视觉装饰，重点保证信息模块整洁统一。"],
+      contentPrompts: ["列出建议常备的备份页，如达人名单、预算明细、排竞说明、素材草图。", "提醒提案人根据客户偏好增删。"],
+      highlightTips: ["附录不是凑页数，而是为现场问答留余量。"],
+    }),
+  ];
+
+  const preferredOptional = optionalSlides.filter((slide) => {
+    if (slide.id === "team") return usage.includes("投标") || usage.includes("讲标");
+    if (slide.id === "data-proof") return form.preference.includes("数据") || form.preference.includes("案例");
+    return true;
+  });
+
+  preferredOptional.forEach((slide) => {
+    if (slides.length < targetRange.target) slides.push(slide);
+  });
+
+  if (slides.length > targetRange.max) {
+    slides.splice(targetRange.max);
+  }
+
+  const optimizationSuggestions = [
+    usage.includes("投标") || usage.includes("讲标")
+      ? "投标/讲标类模板建议在前 3 页尽快给出结论、方法论和客户价值，不要把亮点压到后面。"
+      : "方案开头建议先给结论和机会窗口，再进入洞察与拆解，减少纯背景铺垫。",
+    form.preference.includes("老板") || form.preference.includes("高层")
+      ? "如果客户偏高层决策视角，建议每页只保留 1 条核心结论，数据与案例做成大数字和短标签。"
+      : "若客户偏执行落地视角，建议提高执行、资源、排期三类页面占比，让交付链路更清楚。",
+    form.preference.includes("创意") || form.tone.includes("创意")
+      ? "如果客户偏好创意感，建议增加全屏视觉页和主题页比例，但关键数据页仍保持简洁克制。"
+      : "当前调性更偏专业稳健，建议用统一母版和信息卡层级来提升完成度，而不是堆视觉特效。",
+    projectType.includes("新品上线")
+      ? "新品上线类模板要重点强化“版本节点 - 内容事件 - 转化目标”的联动关系，尤其是预约、首发和回流逻辑。"
+      : projectType.includes("活动")
+        ? "活动推广类模板建议强化节点节奏、社交扩散和资源组合，避免策略页过多抽象概念。"
+        : "整合营销类模板建议加强跨渠道协同、预算逻辑和效果预估，让方案更像真正可执行的 campaign blueprint。",
+  ];
+
+  return {
+    version: "ppt-template-v1" as const,
+    title: `${gameName} ${projectType}PPT模板`,
+    projectType,
+    usage,
+    visualStyle: style,
+    visualKeywords: keywords,
+    storytelling: `建议按“需求背景 → 洞察机会 → 核心策略 → 创意表达 → 执行落地 → 预算排期 → 风险兜底”推进，确保客户先被说服，再被打动，最后被稳住。`,
+    editableGuide: "每页统一预留：标题位、副标题位、1 句核心结论、主图/图表位、补充说明位、页脚备注位，方便后续直接替换和二次编辑。",
+    optimizationSuggestions,
+    referenceAssets,
+    slides,
+  };
+}
+
+function parseTemplatePlan(raw: string) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as OutlineTemplatePlan;
+    return parsed?.version === "ppt-template-v1" && Array.isArray(parsed.slides) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseContentAuditReport(raw: string) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ContentAuditReport;
+    return parsed?.version === "content-audit-v1" && Array.isArray(parsed.sections) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function uniqueStrings(items: string[]) {
+  return Array.from(new Set(items.filter(Boolean)));
+}
+
+function normalizeForMatch(text: string) {
+  return String(text || "").toLowerCase().replace(/\s+/g, "");
+}
+
+function containsAny(text: string, keywords: string[]) {
+  const source = normalizeForMatch(text);
+  return keywords.some((keyword) => source.includes(normalizeForMatch(keyword)));
+}
+
+function sanitizeSectionTitle(raw: string, fallback: string) {
+  const trimmed = raw.trim();
+  const withoutPage = trimmed
+    .replace(/^第?\s*\d+\s*页[:：.\-\s]*/i, "")
+    .replace(/^p\s*\d+[:：.\-\s]*/i, "")
+    .replace(/^#+\s*/, "")
+    .trim();
+  const cleaned = withoutPage.replace(/^【/, "").replace(/】$/, "").trim();
+  return cleaned || fallback;
+}
+
+function inferAuditModule(text: string) {
+  const rules = [
+    { module: "封面", keywords: ["封面", "提案封面", "首页"] },
+    { module: "目录", keywords: ["目录", "提案路径", "章节"] },
+    { module: "背景", keywords: ["背景", "需求", "目标", "现状", "挑战", "成功标准"] },
+    { module: "洞察", keywords: ["洞察", "市场", "用户", "竞品", "机会", "趋势", "案例"] },
+    { module: "策略", keywords: ["策略", "主张", "打法", "路径", "抓手"] },
+    { module: "创意", keywords: ["创意", "主题", "玩法", "内容机制", "传播玩法"] },
+    { module: "执行", keywords: ["执行", "内容矩阵", "渠道", "资源", "协同"] },
+    { module: "预算", keywords: ["预算", "费用", "成本", "投放", "roi", "cpm"] },
+    { module: "排期", keywords: ["排期", "时间轴", "节点", "里程碑", "节奏"] },
+    { module: "风险", keywords: ["风险", "预案", "兜底", "应对", "备选"] },
+    { module: "附录", keywords: ["附录", "备份页", "补充"] },
+  ];
+  const matched = rules.find((rule) => containsAny(text, rule.keywords));
+  return matched?.module || "其他";
+}
+
+function parseContentSections(content: string, templatePlan: OutlineTemplatePlan | null) {
+  const normalized = content.replace(/\r/g, "").trim();
+  if (!normalized) return [] as ParsedAuditSection[];
+
+  let blocks = normalized
+    .split(/\n(?=(?:第?\s*\d+\s*页|P\s*\d+|#|【|[一二三四五六七八九十]+、))/i)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (blocks.length <= 1) {
+    blocks = normalized
+      .split(/\n\s*\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return blocks.map((block, index) => {
+    const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+    let titleLine = lines[0] || `第 ${index + 1} 部分`;
+    let bodyLines = lines.slice(1);
+
+    if (/^第?\s*\d+\s*页$/i.test(titleLine) && bodyLines[0]) {
+      titleLine = bodyLines[0];
+      bodyLines = bodyLines.slice(1);
+    }
+
+    const fallbackTitle = templatePlan?.slides[index]?.title || `第 ${index + 1} 部分`;
+    const title = sanitizeSectionTitle(titleLine, fallbackTitle);
+    const body = bodyLines.join("\n").trim() || block;
+    const matchedSlide = templatePlan?.slides.find((slide) => {
+      const normalizedTitle = normalizeForMatch(title);
+      const normalizedSlideTitle = normalizeForMatch(slide.title);
+      return normalizedTitle.includes(normalizedSlideTitle) || normalizedSlideTitle.includes(normalizedTitle);
+    });
+    const module = matchedSlide?.module || inferAuditModule(`${title}\n${body}`);
+    return {
+      id: `section-${index + 1}`,
+      title,
+      module,
+      body,
+      searchable: normalizeForMatch(`${title}\n${body}`),
+    };
+  });
+}
+
+function requirementAliasKeywords(requirement: string) {
+  const base = [requirement];
+  if (containsAny(requirement, ["海外", "出海", "国际"])) base.push("海外", "出海", "国际", "global", "东南亚", "欧美");
+  if (containsAny(requirement, ["预算", "成本", "roi", "cpm"])) base.push("预算", "成本", "费用", "roi", "cpm", "投放占比");
+  if (containsAny(requirement, ["拉新", "新增", "新用户", "预约"])) base.push("拉新", "新增", "新用户", "预约", "预注册", "转化");
+  if (containsAny(requirement, ["品牌", "破圈", "声量"])) base.push("品牌", "破圈", "声量", "曝光", "传播");
+  if (containsAny(requirement, ["达人", "kol", "koc"])) base.push("达人", "kol", "koc", "主播", "内容合作");
+  if (containsAny(requirement, ["节点", "排期", "节奏"])) base.push("排期", "节点", "节奏", "时间轴", "里程碑");
+  return uniqueStrings(base);
+}
+
+function inferAuditRequirements(briefOutput: string, mustInclude: string, templatePlan: OutlineTemplatePlan | null) {
+  const explicit = splitTokens(mustInclude);
+  const combined = `${briefOutput} ${templatePlan?.title || ""}`;
+  const presets = [
+    { label: "拓展海外市场", keywords: ["海外", "出海", "国际"] },
+    { label: "突出预算拆分", keywords: ["预算", "成本", "费用", "cpm", "roi"] },
+    { label: "强化拉新转化", keywords: ["拉新", "新增", "预约", "转化", "回流"] },
+    { label: "放大品牌破圈", keywords: ["品牌", "破圈", "声量", "曝光"] },
+    { label: "补足达人/KOL 策略", keywords: ["达人", "kol", "koc", "主播"] },
+    { label: "明确项目节奏", keywords: ["排期", "节点", "节奏", "里程碑"] },
+  ];
+  const inferred = presets
+    .filter((item) => item.keywords.some((keyword) => combined.includes(keyword) || explicit.some((value) => value.includes(keyword))))
+    .map((item) => item.label);
+  return uniqueStrings([...explicit, ...inferred]).slice(0, 8);
+}
+
+function requirementRelevantModules(requirement: string) {
+  if (containsAny(requirement, ["预算", "成本", "roi", "cpm"])) return ["预算", "执行"];
+  if (containsAny(requirement, ["海外", "出海", "国际"])) return ["洞察", "策略", "执行"];
+  if (containsAny(requirement, ["达人", "kol", "koc"])) return ["创意", "执行", "预算"];
+  if (containsAny(requirement, ["排期", "节点", "节奏"])) return ["执行", "排期"];
+  return ["策略", "执行"];
+}
+
+function makeAuditFinding(
+  sectionId: string,
+  severity: AuditSeverity,
+  category: AuditCategory,
+  issue: string,
+  detail: string,
+  suggestion: string,
+) {
+  return {
+    id: `${sectionId}-${severity}-${category}-${issue}`,
+    severity,
+    category,
+    issue,
+    detail,
+    suggestion,
+  } satisfies AuditFinding;
+}
+
+function sectionStatus(findings: AuditFinding[]) {
+  if (findings.some((item) => item.severity === "严重问题")) return "高风险";
+  if (findings.some((item) => item.severity === "一般问题")) return "需调整";
+  if (findings.some((item) => item.severity === "优化建议")) return "可优化";
+  return "通过";
+}
+
+function auditStatusTone(status: AuditSectionReport["status"]) {
+  if (status === "高风险") return "danger";
+  if (status === "需调整") return "warning";
+  if (status === "可优化") return "suggestion";
+  return "success";
+}
+
+function auditSeverityTone(severity: AuditSeverity) {
+  if (severity === "严重问题") return "danger";
+  if (severity === "一般问题") return "warning";
+  return "suggestion";
+}
+
+function sectionSummary(title: string, findings: AuditFinding[]) {
+  if (!findings.length) return `${title} 当前结构完整，未发现明显缺项。`;
+  const severe = findings.filter((item) => item.severity === "严重问题").length;
+  const general = findings.filter((item) => item.severity === "一般问题").length;
+  const suggestion = findings.filter((item) => item.severity === "优化建议").length;
+  return `发现 ${severe} 个严重问题、${general} 个一般问题、${suggestion} 条优化建议。`;
+}
+
+function percentageSum(text: string) {
+  const matches = Array.from(text.matchAll(/(\d+(?:\.\d+)?)\s*%/g)).map((item) => Number(item[1]));
+  return matches.length >= 3 ? matches.reduce((total, value) => total + value, 0) : undefined;
+}
+
+function analyzeSection(section: ParsedAuditSection, requirements: string[]) {
+  const findings: AuditFinding[] = [];
+  const text = section.body;
+  const keyRequirements = requirements.flatMap((item) => requirementAliasKeywords(item));
+
+  if (text.trim().length < 60) {
+    findings.push(
+      makeAuditFinding(section.id, "优化建议", "表达完整性", "页面内容偏少", "当前页面文案较薄，可能无法支撑讲标或内部评审。", "建议至少补足核心结论、关键论据和执行说明三层信息。"),
+    );
+  }
+
+  switch (section.module) {
+    case "背景":
+      if (!containsAny(text, ["背景", "现状", "目标", "挑战", "需求", "机会"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "结构完整性", "背景页信息不完整", "未明显说明项目现状、目标或挑战，后续策略缺少起点。", "建议补上“现状 - 问题 - 本次目标”三段式结构。"),
+        );
+      }
+      break;
+    case "洞察":
+      if (!containsAny(text, ["用户", "市场", "竞品", "趋势", "数据", "洞察"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "需求匹配度", "洞察支撑不足", "页面没有清晰呈现用户、市场或竞品依据，洞察结论说服力偏弱。", "建议补充至少一组用户观察、一组市场/竞品判断，并写出对应结论。"),
+        );
+      }
+      if (/\d/.test(text) && !containsAny(text, ["来源", "口径", "统计", "截至"])) {
+        findings.push(
+          makeAuditFinding(section.id, "优化建议", "数据准确性", "数据缺少来源或口径", "页面包含数字判断，但没有标注来源、统计时间或口径。", "建议在页脚或数据块旁补充来源、统计周期和单位。"),
+        );
+      }
+      break;
+    case "策略":
+      if (!containsAny(text, ["策略", "主张", "方向", "打法", "抓手"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "结构完整性", "策略页缺少清晰主张", "页面未形成一句总策略或明确的策略抓手。", "建议先给一句总策略，再拆 2-3 个支柱动作。"),
+        );
+      }
+      if (keyRequirements.length && !containsAny(text, keyRequirements)) {
+        findings.push(
+          makeAuditFinding(section.id, "严重问题", "需求匹配度", "策略未回应核心需求", "当前策略表述没有明显承接客户重点诉求，容易出现“说了很多但没答题”。", "建议在策略标题或抓手描述中直接回应客户最关心的需求点。"),
+        );
+      }
+      break;
+    case "创意":
+      if (!containsAny(text, ["创意", "主题", "玩法", "内容", "传播"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "结构完整性", "创意页缺少玩法描述", "页面没有说明核心创意主题或传播玩法，创意层显得空泛。", "建议补足主题命名、内容母题和玩法落地方式。"),
+        );
+      }
+      break;
+    case "执行":
+      if (!containsAny(text, ["执行", "渠道", "投放", "资源", "动作", "内容矩阵"])) {
+        findings.push(
+          makeAuditFinding(section.id, "严重问题", "逻辑连贯性", "执行计划与目标脱节", "页面没有落到渠道、资源、动作或协同方式，难以证明策略可以落地。", "建议按“阶段 - 渠道 - 动作 - 负责人”补齐执行链路。"),
+        );
+      }
+      if (keyRequirements.length && !containsAny(text, keyRequirements)) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "逻辑连贯性", "执行内容没有承接重点需求", "执行动作与客户重点诉求之间的连接不明显。", "建议把关键需求词直接映射到执行阶段、渠道和资源配置中。"),
+        );
+      }
+      if (!containsAny(text, ["阶段", "时间", "节点", "预热", "爆发", "延续", "上线"])) {
+        findings.push(
+          makeAuditFinding(section.id, "优化建议", "结构完整性", "执行节奏描述偏弱", "页面提到了执行动作，但缺少阶段感和节奏安排。", "建议增加预热、爆发、延续或版本节点的拆分。"),
+        );
+      }
+      break;
+    case "预算":
+      if (!/\d/.test(text)) {
+        findings.push(
+          makeAuditFinding(section.id, "严重问题", "数据准确性", "预算页缺少关键数字", "预算页面没有数字或费用区间，无法支撑投入判断。", "建议至少补充总预算、核心成本拆分和重点费用占比。"),
+        );
+      }
+      if (/\d/.test(text) && !containsAny(text, ["元", "万", "%", "预算", "费用", "成本"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "数据准确性", "数字缺少单位或业务含义", "页面出现数字，但没有说明单位、预算项或指标含义。", "建议统一补充金额单位、比例单位和对应预算项名称。"),
+        );
+      }
+      {
+        const total = percentageSum(text);
+        if (typeof total === "number" && (total < 90 || total > 110)) {
+          findings.push(
+            makeAuditFinding(section.id, "一般问题", "数据准确性", "预算比例加总异常", `当前页面多项百分比相加约为 ${Math.round(total)}%，可能存在拆分口径不一致。`, "建议核对占比口径，确保同一组预算比例总和接近 100%。"),
+          );
+        }
+      }
+      break;
+    case "排期":
+      if (!containsAny(text, ["排期", "节点", "里程碑", "时间", "阶段"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "结构完整性", "排期页缺少时间节点", "页面没有清晰给出关键时间点或里程碑。", "建议用时间轴或阶段表明确关键节点和交付物。"),
+        );
+      }
+      if (!/(\d{1,2}[月\-\/]\d{1,2}|q[1-4]|上旬|中旬|下旬|周)/i.test(text)) {
+        findings.push(
+          makeAuditFinding(section.id, "优化建议", "数据准确性", "时间表达不够具体", "排期页描述偏抽象，缺少明确日期或周期。", "建议补充月份、版本日期或周次，让客户更容易判断可执行性。"),
+        );
+      }
+      break;
+    case "风险":
+      if (!containsAny(text, ["风险", "预案", "应对", "备选", "兜底"])) {
+        findings.push(
+          makeAuditFinding(section.id, "一般问题", "结构完整性", "风险页缺少应对动作", "页面没有把风险和应对措施成对写清楚。", "建议按“风险场景 - 触发条件 - 应对动作 - 负责人”展开。"),
+        );
+      }
+      break;
+    default:
+      break;
+  }
+
+  return {
+    id: section.id,
+    title: section.title,
+    module: section.module,
+    status: sectionStatus(findings),
+    summary: sectionSummary(section.title, findings),
+    findings,
+  } satisfies AuditSectionReport;
+}
+
+function analyzeGlobalFindings(sections: ParsedAuditSection[], requirements: string[], templatePlan: OutlineTemplatePlan | null) {
+  const findings: AuditFinding[] = [];
+  const modules = new Set(sections.map((section) => section.module));
+  const expectedModules = uniqueStrings((templatePlan?.slides || []).map((slide) => slide.module)).filter((module) => !["封面", "目录", "附录"].includes(module));
+
+  expectedModules.forEach((module) => {
+    if (!modules.has(module)) {
+      findings.push(
+        makeAuditFinding(
+          "global",
+          module === "策略" || module === "执行" || module === "预算" ? "严重问题" : "一般问题",
+          "结构完整性",
+          `缺少“${module}”模块`,
+          `当前待检查内容里没有明确出现“${module}”相关页面或模块。`,
+          `建议补上“${module}”模块，避免提案链路断层。`,
+        ),
+      );
+    }
+  });
+
+  requirements.forEach((requirement) => {
+    const aliases = requirementAliasKeywords(requirement);
+    const matchedSections = sections.filter((section) => aliases.some((keyword) => section.searchable.includes(normalizeForMatch(keyword))));
+    if (!matchedSections.length) {
+      findings.push(
+        makeAuditFinding(
+          "global",
+          "严重问题",
+          "需求匹配度",
+          `未体现客户提出的“${requirement}”需求`,
+          `逐页检查后，没有发现页面明确承接“${requirement}”相关内容。`,
+          `建议在背景、策略或执行相关页面直接加入“${requirement}”的目标、动作和衡量方式。`,
+        ),
+      );
+      return;
+    }
+
+    const relevantModules = requirementRelevantModules(requirement);
+    const coveredRelevantModule = matchedSections.some((section) => relevantModules.includes(section.module));
+    if (!coveredRelevantModule) {
+      findings.push(
+        makeAuditFinding(
+          "global",
+          "一般问题",
+          "逻辑连贯性",
+          `“${requirement}”未落实到关键模块`,
+          `当前仅在部分页面提到“${requirement}”，但没有落实到 ${relevantModules.join("、")} 等关键模块。`,
+          `建议在 ${relevantModules.join("、")} 页面补充针对“${requirement}”的具体策略或动作。`,
+        ),
+      );
+    }
+  });
+
+  return findings;
+}
+
+function buildOverallSuggestions(reportSections: AuditSectionReport[]) {
+  const allFindings = reportSections.flatMap((section) => section.findings);
+  const suggestions: string[] = [];
+  if (allFindings.some((item) => item.severity === "严重问题")) {
+    suggestions.push("先修正严重问题，再处理一般问题和表达优化，避免返工顺序颠倒。");
+  }
+  if (allFindings.some((item) => item.category === "需求匹配度")) {
+    suggestions.push("把客户重点需求直接写进策略标题、执行动作和预算说明里，减少“知道但没写出来”的情况。");
+  }
+  if (allFindings.some((item) => item.category === "逻辑连贯性")) {
+    suggestions.push("建议按“目标 - 洞察 - 策略 - 执行 - 预算 - 风险”重新串一次页面，确保前后因果关系成立。");
+  }
+  if (allFindings.some((item) => item.category === "数据准确性")) {
+    suggestions.push("所有关键数据统一补来源、统计口径、时间范围和单位，避免讲标时被追问。");
+  }
+  if (!suggestions.length) {
+    suggestions.push("当前内容结构较完整，可以继续打磨表达密度、视觉层级和结论呈现方式。");
+  }
+  return uniqueStrings(suggestions);
+}
+
+function buildContentAuditReport(
+  form: { mustInclude: string; content: string },
+  briefOutput: string,
+  templatePlan: OutlineTemplatePlan | null,
+) {
+  const requirements = inferAuditRequirements(briefOutput, form.mustInclude, templatePlan);
+  if (!form.content.trim()) {
+    const findings = [
+      makeAuditFinding("global", "严重问题", "结构完整性", "尚未提供待检查内容", "当前没有可供逐页审阅的 PPT 文案或模块内容。", "请粘贴逐页内容后再生成检查报告。"),
+    ];
+    const section: AuditSectionReport = {
+      id: "global",
+      title: "整体检查",
+      module: "整体",
+      status: "高风险",
+      summary: sectionSummary("整体检查", findings),
+      findings,
+    };
+    return {
+      version: "content-audit-v1" as const,
+      title: "内容检查报告",
+      requirements,
+      briefSummary: summarize(briefOutput || "暂无 Brief 需求解构。"),
+      overallSummary: "当前尚未提供可检查的逐页内容。",
+      totals: { severe: 1, general: 0, suggestion: 0 },
+      overallSuggestions: ["先粘贴逐页文案或模块内容，再生成逐页问题报告。"],
+      sections: [section],
+    };
+  }
+
+  const parsedSections = parseContentSections(form.content, templatePlan);
+  const globalFindings = analyzeGlobalFindings(parsedSections, requirements, templatePlan);
+  const reports: AuditSectionReport[] = [];
+
+  if (globalFindings.length) {
+    reports.push({
+      id: "global",
+      title: "整体检查",
+      module: "整体",
+      status: sectionStatus(globalFindings),
+      summary: sectionSummary("整体检查", globalFindings),
+      findings: globalFindings,
+    });
+  }
+
+  parsedSections.forEach((section) => {
+    reports.push(analyzeSection(section, requirements));
+  });
+
+  const totals = reports.flatMap((section) => section.findings).reduce(
+    (accumulator, finding) => {
+      if (finding.severity === "严重问题") accumulator.severe += 1;
+      else if (finding.severity === "一般问题") accumulator.general += 1;
+      else accumulator.suggestion += 1;
+      return accumulator;
+    },
+    { severe: 0, general: 0, suggestion: 0 },
+  );
+
+  const overallSummary = totals.severe
+    ? `本次检查发现 ${totals.severe} 个严重问题，建议优先补齐需求承接、关键模块和数字信息。`
+    : totals.general
+      ? `本次检查未发现严重问题，但有 ${totals.general} 个一般问题需要修正。`
+      : totals.suggestion
+        ? `本次检查整体通过，另有 ${totals.suggestion} 条优化建议可继续打磨。`
+        : "本次检查未发现明显问题，整体结构和承接关系较完整。";
+
+  return {
+    version: "content-audit-v1" as const,
+    title: "内容检查报告",
+    requirements,
+    briefSummary: summarize(briefOutput || "暂无 Brief 需求解构。"),
+    overallSummary,
+    totals,
+    overallSuggestions: buildOverallSuggestions(reports),
+    sections: reports,
+  };
+}
+
 function daysUntil(dateText: string) {
   const date = new Date(dateText);
   if (Number.isNaN(date.getTime())) return 999;
@@ -632,6 +1555,8 @@ function App() {
   const [selectedResourceId, setSelectedResourceId] = useState(1);
   const [briefOutput, setBriefOutput] = usePersistentState("strategy-center-brief-output", "");
   const [outlineOutput, setOutlineOutput] = usePersistentState("strategy-center-outline-output", "");
+  const [contentAuditOutput, setContentAuditOutput] = usePersistentState("strategy-center-content-audit-output", "");
+  const [outlineTab, setOutlineTab] = useState<OutlineTab>("template");
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const selectedResource = resources.find((resource) => resource.id === selectedResourceId) ?? resources[0];
 
@@ -671,6 +1596,11 @@ function App() {
     setPage("resourceDetail");
   };
 
+  const openOutline = (tab: OutlineTab = "template") => {
+    setOutlineTab(tab);
+    setPage("outline");
+  };
+
   const deleteResource = (resourceId: number) => {
     const resource = resources.find((item) => item.id === resourceId);
     setResources((current) => current.filter((item) => item.id !== resourceId));
@@ -685,16 +1615,16 @@ function App() {
     <div className="app-shell">
       <Sidebar page={page} setPage={setPage} />
       <main className="workspace">
-        <Topbar setPage={setPage} />
-        {page === "home" && <Home projects={projects} members={members} jobs={jobs} setPage={setPage} openProject={navigateProject} />}
+        <Topbar setPage={setPage} openOutline={openOutline} />
+        {page === "home" && <Home projects={projects} members={members} jobs={jobs} setPage={setPage} openProject={navigateProject} openOutline={openOutline} />}
         {page === "projects" && <Projects projects={projects} members={members} openProject={navigateProject} setProjects={setProjects} addJob={addJob} />}
         {page === "projectDetail" && <ProjectDetail project={selectedProject} members={members} projects={projects} resources={resources} openResource={navigateResource} setPage={setPage} setProjects={setProjects} addJob={addJob} />}
         {page === "people" && <PeopleManagement members={members} setMembers={setMembers} projects={projects} addJob={addJob} />}
         {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} />}
         {page === "resourceUpload" && <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} />}
         {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} />}
-        {page === "brief" && <BriefAssistant briefOutput={briefOutput} setBriefOutput={setBriefOutput} setPage={setPage} addJob={addJob} />}
-        {page === "outline" && <OutlineAssistant briefOutput={briefOutput} resources={resources} outlineOutput={outlineOutput} setOutlineOutput={setOutlineOutput} addJob={addJob} />}
+        {page === "brief" && <BriefAssistant briefOutput={briefOutput} setBriefOutput={setBriefOutput} setPage={setPage} openOutline={openOutline} addJob={addJob} />}
+        {page === "outline" && <OutlineAssistant briefOutput={briefOutput} resources={resources} outlineOutput={outlineOutput} setOutlineOutput={setOutlineOutput} contentAuditOutput={contentAuditOutput} setContentAuditOutput={setContentAuditOutput} entryTab={outlineTab} addJob={addJob} />}
         {page === "aiJobs" && <AiJobs jobs={jobs} />}
         {page === "settings" && <Settings />}
       </main>
@@ -739,12 +1669,13 @@ function Sidebar({ page, setPage }: { page: Page; setPage: (page: Page) => void 
   );
 }
 
-function Topbar({ setPage }: { setPage: (page: Page) => void }) {
+function Topbar({ setPage, openOutline }: { setPage: (page: Page) => void; openOutline: (tab?: OutlineTab) => void }) {
   return (
     <header className="topbar">
       <div className="search-box">搜索项目、资料、任务，例如“二次元新品上线方案”</div>
       <div className="topbar-actions">
         <button className="ghost-button" onClick={() => setPage("resourceUpload")}>上传资料</button>
+        <button className="ghost-button audit-entry-button" onClick={() => openOutline("audit")}>内容检查</button>
         <button className="primary-button" onClick={() => setPage("brief")}>解析 Brief</button>
         <div className="avatar">ZY</div>
       </div>
@@ -752,7 +1683,21 @@ function Topbar({ setPage }: { setPage: (page: Page) => void }) {
   );
 }
 
-function Home({ projects, members, jobs, setPage, openProject }: { projects: Project[]; members: Member[]; jobs: AiJob[]; setPage: (page: Page) => void; openProject: (id: number) => void }) {
+function Home({
+  projects,
+  members,
+  jobs,
+  setPage,
+  openProject,
+  openOutline,
+}: {
+  projects: Project[];
+  members: Member[];
+  jobs: AiJob[];
+  setPage: (page: Page) => void;
+  openProject: (id: number) => void;
+  openOutline: (tab?: OutlineTab) => void;
+}) {
   const overdueTasks = projects.flatMap((project) => project.tasks.filter((task) => task.status === "延期"));
   const dueTasks = projects.flatMap((project) => project.tasks.filter((task) => task.status !== "已完成"));
 
@@ -784,7 +1729,8 @@ function Home({ projects, members, jobs, setPage, openProject }: { projects: Pro
       <div className="quick-panel">
         <button onClick={() => setPage("resourceUpload")}>上传资料</button>
         <button onClick={() => setPage("brief")}>解析 Brief</button>
-        <button onClick={() => setPage("outline")}>生成方案大纲</button>
+        <button onClick={() => openOutline("template")}>生成 PPT 模板</button>
+        <button className="quick-panel-audit" onClick={() => openOutline("audit")}>内容检查报告</button>
         <button onClick={() => setPage("projects")}>新建项目</button>
       </div>
       <Card title="最近 AI 任务">
@@ -1599,7 +2545,19 @@ function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resourc
   );
 }
 
-function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { briefOutput: string; setBriefOutput: (value: string) => void; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void }) {
+function BriefAssistant({
+  briefOutput,
+  setBriefOutput,
+  setPage,
+  openOutline,
+  addJob,
+}: {
+  briefOutput: string;
+  setBriefOutput: (value: string) => void;
+  setPage: (page: Page) => void;
+  openOutline: (tab?: OutlineTab) => void;
+  addJob: (type: string, name: string, source: string) => void;
+}) {
   const [apiConfig, setApiConfig] = usePersistentState<BriefApiConfig>("strategy-center-brief-api-config", {
     endpoint: "",
     apiKey: "",
@@ -1723,7 +2681,15 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
           </div>
           <button className="primary-button wide" onClick={run} disabled={isRunning}>{isRunning ? "解析中..." : "开始解析"}</button>
         </Card>
-        <Card title="AI 需求解构报告" action={<button className="ghost-button" onClick={() => setPage("outline")}>用于生成大纲</button>}>
+        <Card
+          title="AI 需求解构报告"
+          action={
+            <div className="card-actions">
+              <button className="ghost-button" onClick={() => openOutline("template")}>生成模板</button>
+              <button className="ghost-button audit-entry-button" onClick={() => openOutline("audit")}>内容检查入口</button>
+            </div>
+          }
+        >
           <pre className="ai-output">{briefOutput || "填写左侧信息后，AI 将在这里输出需求解构、风险点和客户确认 QA。"}</pre>
         </Card>
       </div>
@@ -1731,66 +2697,261 @@ function BriefAssistant({ briefOutput, setBriefOutput, setPage, addJob }: { brie
   );
 }
 
-function OutlineAssistant({ briefOutput, resources, outlineOutput, setOutlineOutput, addJob }: { briefOutput: string; resources: Resource[]; outlineOutput: string; setOutlineOutput: (value: string) => void; addJob: (type: string, name: string, source: string) => void }) {
+function OutlineAssistant({
+  briefOutput,
+  resources,
+  outlineOutput,
+  setOutlineOutput,
+  contentAuditOutput,
+  setContentAuditOutput,
+  entryTab,
+  addJob,
+}: {
+  briefOutput: string;
+  resources: Resource[];
+  outlineOutput: string;
+  setOutlineOutput: (value: string) => void;
+  contentAuditOutput: string;
+  setContentAuditOutput: (value: string) => void;
+  entryTab: OutlineTab;
+  addJob: (type: string, name: string, source: string) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<"template" | "audit">("template");
   const [form, setForm] = useState({
     tone: "专业严谨",
     pageRange: "18-22",
     modules: "背景、洞察、策略、创意、执行、预算、排期、风险",
     preference: "",
   });
+  const [auditForm, setAuditForm] = useState({
+    mustInclude: "",
+    content: "",
+  });
+  const templatePlan = useMemo(() => parseTemplatePlan(outlineOutput), [outlineOutput]);
+  const auditReport = useMemo(() => parseContentAuditReport(contentAuditOutput), [contentAuditOutput]);
+  const suggestedRequirements = useMemo(() => inferAuditRequirements(briefOutput, auditForm.mustInclude, templatePlan), [briefOutput, auditForm.mustInclude, templatePlan]);
 
-  const run = () => {
-    const related = resources.slice(0, 3).map((resource) => resource.title).join("、");
-    setOutlineOutput(`方案调性：${form.tone}
-页数范围：${form.pageRange}
-必含模块：${form.modules}
-客户偏好：${form.preference || "暂无特殊偏好"}
+  useEffect(() => {
+    setActiveTab(entryTab);
+  }, [entryTab]);
 
-整体叙事逻辑：
-先用市场和用户洞察证明机会，再提出核心策略和创意主题，随后拆解传播玩法、资源组合、执行排期、预算与效果预估，最后用风险预案和团队能力增强可信度。
-
-已参考资料：
-${related || "暂无资料库参考"}
-
-需求依据：
-${briefOutput ? summarize(briefOutput) : "未选择需求解构报告，当前基于通用游戏营销方案结构生成。"}`);
-    addJob("方案大纲", "新品上线投标方案大纲", "方案助手");
+  const runTemplate = () => {
+    const plan = buildTemplatePlan(form, briefOutput, resources);
+    setOutlineOutput(JSON.stringify(plan));
+    addJob("PPT 模板", plan.title, "方案助手");
   };
 
-  const pages = ["封面", "项目背景", "市场与用户洞察", "竞品与机会分析", "核心策略", "创意与传播玩法", "执行规划", "项目排期", "预算与效果预估", "风险与应对"];
+  const runAudit = () => {
+    const report = buildContentAuditReport(auditForm, briefOutput, templatePlan);
+    setContentAuditOutput(JSON.stringify(report));
+    addJob("内容检查", `PPT 内容检查报告 ${report.totals.severe ? "待修正" : "已生成"}`, "方案助手");
+  };
 
   return (
     <section className="page">
-      <PageTitle title="方案大纲生成" subtitle="基于需求解构、调性和参考资料生成可编辑 PPT 结构。" />
-      <div className="split-panel">
-        <Card title="生成配置">
-          <div className="form-grid">
-            <Field label="方案调性" value={form.tone} onChange={(value) => setForm({ ...form, tone: value })} />
-            <Field label="页数范围" value={form.pageRange} onChange={(value) => setForm({ ...form, pageRange: value })} />
-            <Field label="必含模块" value={form.modules} onChange={(value) => setForm({ ...form, modules: value })} />
-            <Field label="客户偏好" value={form.preference} onChange={(value) => setForm({ ...form, preference: value })} />
-          </div>
-          <div className="note-box">
-            <strong>已载入需求解构</strong>
-            <p>{briefOutput ? summarize(briefOutput) : "还没有 Brief 解析结果，可以先去“方案助手 > Brief 解析”生成。"}</p>
-          </div>
-          <button className="primary-button wide" onClick={run}>生成大纲</button>
-        </Card>
-        <Card title="方案大纲">
-          <p className="muted">{outlineOutput || "配置左侧参数后生成方案大纲。"}</p>
-          <div className="outline-list">
-            {pages.map((page, index) => (
-              <div className="outline-item" key={page}>
-                <span>{index + 1}</span>
-                <div>
-                  <strong>{page}</strong>
-                  <p>页面目标、核心内容、建议素材和引用资料将在这里展示。</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
+      <PageTitle title="PPT 模板与内容检查" subtitle={activeTab === "template" ? "生成可编辑的 PPT 页面模板，并补齐布局、视觉和填充提示。" : "逐页/逐模块检查当前 PPT 内容，输出分类问题报告。"} />
+      <div className="tabs">
+        <button className={`tab ${activeTab === "template" ? "active" : ""}`} onClick={() => setActiveTab("template")}>PPT 模板生成</button>
+        <button className={`tab ${activeTab === "audit" ? "active" : ""}`} onClick={() => setActiveTab("audit")}>内容检查报告</button>
       </div>
+      {activeTab === "template" ? (
+        <div className="split-panel">
+          <Card title="生成配置">
+            <div className="form-grid">
+              <Field label="方案调性" value={form.tone} onChange={(value) => setForm({ ...form, tone: value })} />
+              <Field label="页数范围" value={form.pageRange} onChange={(value) => setForm({ ...form, pageRange: value })} />
+              <Field label="必含模块" value={form.modules} onChange={(value) => setForm({ ...form, modules: value })} />
+              <Field label="客户偏好" value={form.preference} onChange={(value) => setForm({ ...form, preference: value })} />
+            </div>
+            <div className="note-box">
+              <strong>已载入需求解构</strong>
+              <p>{briefOutput ? summarize(briefOutput) : "还没有 Brief 解析结果，可以先去“方案助手 > Brief 解析”生成。"}</p>
+            </div>
+            <div className="note-box">
+              <strong>本次生成会包含</strong>
+              <p>封面与目录模板、各必含模块页面框架、页面布局建议、视觉元素搭配、内容填充提示，以及结合方案类型和客户偏好的模板优化建议。</p>
+            </div>
+            <button className="primary-button wide" onClick={runTemplate}>生成 PPT 模板</button>
+          </Card>
+          <Card title="PPT 模板预览" action={<button className="ghost-button" onClick={() => setActiveTab("audit")}>去做内容检查</button>}>
+            {templatePlan ? (
+              <>
+                <div className="template-hero">
+                  <div>
+                    <span className="template-kicker">{templatePlan.projectType} · {templatePlan.usage}</span>
+                    <h3>{templatePlan.title}</h3>
+                    <p className="muted">{templatePlan.storytelling}</p>
+                  </div>
+                  <div className="template-count">
+                    <strong>{templatePlan.slides.length}</strong>
+                    <span>建议页数</span>
+                  </div>
+                </div>
+                <div className="template-meta-grid">
+                  <div className="note-box">
+                    <strong>视觉母版建议</strong>
+                    <p>{templatePlan.visualStyle}</p>
+                    <div className="tag-row">{templatePlan.visualKeywords.map((keyword) => <span key={keyword}>{keyword}</span>)}</div>
+                  </div>
+                  <div className="note-box">
+                    <strong>可编辑模板规则</strong>
+                    <p>{templatePlan.editableGuide}</p>
+                  </div>
+                </div>
+                <div className="note-box">
+                  <strong>模板优化建议</strong>
+                  <ul className="template-list">
+                    {templatePlan.optimizationSuggestions.map((tip) => <li key={tip}>{tip}</li>)}
+                  </ul>
+                </div>
+                {!!templatePlan.referenceAssets.length && (
+                  <div className="note-box">
+                    <strong>参考资料</strong>
+                    <div className="tag-row">{templatePlan.referenceAssets.map((asset) => <span key={asset}>{asset}</span>)}</div>
+                  </div>
+                )}
+                <div className="outline-list template-slide-list">
+                  {templatePlan.slides.map((slide, index) => (
+                    <div className="template-slide" key={slide.id}>
+                      <div className="template-slide-header">
+                        <span>{index + 1}</span>
+                        <div>
+                          <strong>{slide.title}</strong>
+                          <p>{slide.objective}</p>
+                        </div>
+                      </div>
+                      <div className="tag-row">
+                        <span>{slide.module}</span>
+                        {slide.editableBlocks.slice(0, 2).map((item) => <span key={`${slide.id}-${item}`}>{item}</span>)}
+                      </div>
+                      <div className="template-slide-grid">
+                        <div className="template-slide-section">
+                          <h4>页面布局建议</h4>
+                          <ul className="template-list">
+                            {slide.layoutTips.map((item) => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
+                        <div className="template-slide-section">
+                          <h4>视觉元素搭配</h4>
+                          <ul className="template-list">
+                            {slide.visualTips.map((item) => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
+                        <div className="template-slide-section">
+                          <h4>内容填充提示</h4>
+                          <ul className="template-list">
+                            {slide.contentPrompts.map((item) => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
+                        <div className="template-slide-section">
+                          <h4>重点内容</h4>
+                          <ul className="template-list">
+                            {slide.highlightTips.map((item) => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
+                      </div>
+                      <div className="note-box compact-note">
+                        <strong>可直接编辑的模块位</strong>
+                        <div className="tag-row">{slide.editableBlocks.map((item) => <span key={`${slide.id}-block-${item}`}>{item}</span>)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="muted">{outlineOutput || "配置左侧参数后生成 PPT 模板。"}</p>
+            )}
+          </Card>
+        </div>
+      ) : (
+        <div className="split-panel">
+          <Card title="检查配置">
+            <div className="note-box">
+              <strong>检查依据</strong>
+              <p>{briefOutput ? summarize(briefOutput) : "当前没有 Brief 解构，系统会优先根据你手动填写的重点需求检查。"}</p>
+            </div>
+            <textarea value={auditForm.mustInclude} onChange={(event) => setAuditForm({ ...auditForm, mustInclude: event.target.value })} placeholder="客户重点需求/必提要求，例如：拓展海外市场、突出预算合理性、加强达人传播..." />
+            <textarea value={auditForm.content} onChange={(event) => setAuditForm({ ...auditForm, content: event.target.value })} placeholder={"粘贴当前 PPT 的逐页内容，建议按下面格式：\n第1页 封面\n一句话主张...\n\n第2页 项目背景\n项目现状...\n\n第3页 核心策略\n策略主张..."} />
+            <div className="note-box">
+              <strong>系统会重点检查</strong>
+              <p>需求匹配度、逻辑连贯性、数据准确性，并按严重问题 / 一般问题 / 优化建议分类输出。</p>
+              {!!suggestedRequirements.length && <div className="tag-row">{suggestedRequirements.map((item) => <span key={item}>{item}</span>)}</div>}
+            </div>
+            <button className="primary-button wide" onClick={runAudit}>生成检查报告</button>
+          </Card>
+          <Card title="内容检查报告">
+            {auditReport ? (
+              <>
+                <div className="audit-summary-grid">
+                  <div className="audit-stat severe">
+                    <span>严重问题</span>
+                    <strong>{auditReport.totals.severe}</strong>
+                  </div>
+                  <div className="audit-stat general">
+                    <span>一般问题</span>
+                    <strong>{auditReport.totals.general}</strong>
+                  </div>
+                  <div className="audit-stat suggestion">
+                    <span>优化建议</span>
+                    <strong>{auditReport.totals.suggestion}</strong>
+                  </div>
+                </div>
+                <div className="note-box">
+                  <strong>总体结论</strong>
+                  <p>{auditReport.overallSummary}</p>
+                </div>
+                {!!auditReport.requirements.length && (
+                  <div className="note-box">
+                    <strong>重点需求对齐</strong>
+                    <div className="tag-row">{auditReport.requirements.map((item) => <span key={item}>{item}</span>)}</div>
+                  </div>
+                )}
+                <div className="note-box">
+                  <strong>修订优先级建议</strong>
+                  <ul className="template-list">
+                    {auditReport.overallSuggestions.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+                <div className="outline-list audit-section-list">
+                  {auditReport.sections.map((section) => (
+                    <div className="audit-section" key={section.id}>
+                      <div className="audit-section-header">
+                        <div>
+                          <div className="tag-row">
+                            <span className={`audit-status ${auditStatusTone(section.status)}`}>{section.status}</span>
+                            <span>{section.module}</span>
+                          </div>
+                          <strong>{section.title}</strong>
+                          <p>{section.summary}</p>
+                        </div>
+                      </div>
+                      {section.findings.length ? (
+                        <div className="finding-list">
+                          {section.findings.map((finding) => (
+                            <div className={`finding-card ${auditSeverityTone(finding.severity)}`} key={finding.id}>
+                              <div className="finding-head">
+                                <span className={`finding-badge ${auditSeverityTone(finding.severity)}`}>{finding.severity}</span>
+                                <span className="finding-category">{finding.category}</span>
+                              </div>
+                              <strong>{finding.issue}</strong>
+                              <p>{finding.detail}</p>
+                              <div className="finding-suggestion">建议：{finding.suggestion}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty-state compact">当前页面暂未发现明显问题。</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="muted">{contentAuditOutput || "粘贴逐页内容后，这里会输出逐页/逐模块检查报告。"}</p>
+            )}
+          </Card>
+        </div>
+      )}
     </section>
   );
 }
@@ -2011,7 +3172,7 @@ ${actionLines.join("\n")}
 function AiJobs({ jobs, embedded = false }: { jobs: AiJob[]; embedded?: boolean }) {
   return (
     <section className={embedded ? "" : "page"}>
-      {!embedded && <PageTitle title="AI 任务记录" subtitle="追踪文档解析、Brief 解析、方案大纲和排期生成任务。" />}
+      {!embedded && <PageTitle title="AI 任务记录" subtitle="追踪文档解析、Brief 解析、PPT 模板、内容检查和排期生成任务。" />}
       <Card title={embedded ? "" : "任务列表"}>
         <table>
           <thead>
