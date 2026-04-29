@@ -543,6 +543,27 @@ async function handleBriefRun(req, res) {
   sendJson(res, 200, JSON.parse(text));
 }
 
+async function handleMarketingResearchRun(req, res) {
+  const { endpoint, apiKey, model, input, prompt, messages } = await readJson(req);
+  if (!endpoint) {
+    sendJson(res, 400, { error: "请先填写接口地址。" });
+    return;
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: apiHeaders(apiKey),
+    body: JSON.stringify({ model: model || undefined, input, prompt, messages }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    sendJson(res, response.status, { error: text || "营销调研 API 调用失败。" });
+    return;
+  }
+
+  sendJson(res, 200, JSON.parse(text));
+}
+
 async function serveStatic(req, res) {
   const rawPath = new URL(req.url || "/", `http://${req.headers.host}`).pathname;
   const safePath = normalize(rawPath).replace(/^(\.\.[/\\])+/, "");
@@ -579,6 +600,16 @@ createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/brief-run") {
       await handleBriefRun(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketing-research-models") {
+      await handleBriefModels(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketing-research-run") {
+      await handleMarketingResearchRun(req, res);
       return;
     }
 
