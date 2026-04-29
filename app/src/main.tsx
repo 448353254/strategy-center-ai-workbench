@@ -18,10 +18,15 @@ type Page =
 type Risk = "正常" | "一般" | "紧急" | "严重";
 type TaskStatus = "未开始" | "进行中" | "已完成" | "延期" | "暂停";
 type Priority = "P1" | "P2" | "P3";
+type BidResult = "跟进中" | "中标" | "未中标";
+type LostReasonCategory = "需求匹配度" | "报价" | "创意" | "竞品冲击" | "方案打磨" | "客户资源" | "其他";
 
 const riskOptions: Risk[] = ["正常", "一般", "紧急", "严重"];
 const taskStatusOptions: TaskStatus[] = ["未开始", "进行中", "已完成", "延期", "暂停"];
 const memberStatusOptions: Member["status"][] = ["正常", "请假", "加班"];
+const clientTypeOptions = ["大厂", "中小厂商", "渠道方", "发行商", "代理商", "其他"];
+const bidResultOptions: BidResult[] = ["跟进中", "中标", "未中标"];
+const lostReasonOptions: LostReasonCategory[] = ["需求匹配度", "报价", "创意", "竞品冲击", "方案打磨", "客户资源", "其他"];
 
 interface ProjectTask {
   id: number;
@@ -56,6 +61,16 @@ interface Project {
   risk: Risk;
   tasks: ProjectTask[];
   resourceIds?: number[];
+  gameType?: string;
+  clientType?: string;
+  bidDate?: string;
+  bidAmount?: number;
+  clientCoreNeeds?: string;
+  bidResult?: BidResult;
+  lostReasonCategory?: LostReasonCategory;
+  lostReasonDetail?: string;
+  winningFactors?: string;
+  competitorContext?: string;
 }
 
 interface Resource {
@@ -195,6 +210,14 @@ const projectsSeed: Project[] = [
     pitch: "2026-05-10",
     status: "进行中",
     risk: "紧急",
+    gameType: "二次元",
+    clientType: "大厂",
+    bidDate: "2026-04-29",
+    bidAmount: 180,
+    clientCoreNeeds: "重视数据支撑、渠道资源和执行确定性。",
+    bidResult: "未中标",
+    lostReasonCategory: "方案打磨",
+    lostReasonDetail: "内部评审延期，客户补充需求确认不充分。",
     tasks: initialTasks,
     resourceIds: [1, 3],
   },
@@ -212,6 +235,13 @@ const projectsSeed: Project[] = [
     pitch: "2026-05-06",
     status: "进行中",
     risk: "一般",
+    gameType: "女性向",
+    clientType: "中小厂商",
+    bidDate: "2026-04-25",
+    bidAmount: 80,
+    clientCoreNeeds: "看重创意玩法、社群情绪和玩家口碑风险控制。",
+    bidResult: "中标",
+    winningFactors: "用户洞察准确，创意与周年节点结合紧密，风险预案完整。",
     tasks: initialTasks.slice(0, 2),
     resourceIds: [2],
   },
@@ -1053,11 +1083,16 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
     risk: "",
     ownerId: "",
   });
+  const [bidPeriod, setBidPeriod] = useState<"月" | "季度" | "年">("月");
   const [form, setForm] = useState({
     name: "",
     game: "",
     client: "",
     type: "新品上线",
+    gameType: "",
+    clientType: "大厂",
+    bidAmount: "",
+    clientCoreNeeds: "",
     ownerId: members[0]?.id ? `${members[0].id}` : "",
     start: today(),
     submit: "2026-05-08",
@@ -1072,6 +1107,12 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
       game: form.game.trim(),
       client: form.client.trim() || "待确认客户",
       type: form.type,
+      gameType: form.gameType.trim() || form.type,
+      clientType: form.clientType,
+      bidDate: form.start,
+      bidAmount: Number(form.bidAmount) || undefined,
+      clientCoreNeeds: form.clientCoreNeeds.trim(),
+      bidResult: "跟进中",
       owner: memberName(members, Number(form.ownerId), "未分配"),
       ownerId: Number(form.ownerId) || undefined,
       stage: "项目启动",
@@ -1096,6 +1137,7 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
 
   const projectTypes = Array.from(new Set(projects.map((project) => project.type).filter(Boolean)));
   const projectStatuses = Array.from(new Set(projects.map((project) => project.status).filter(Boolean)));
+  const bidAnalysis = buildBidAnalysis(projects, bidPeriod);
   const filteredProjects = projects.filter((project) => {
     const corpus = `${project.name}${project.game}${project.client}${project.type}${project.stage}${memberName(members, project.ownerId, project.owner)}`;
     return (
@@ -1109,12 +1151,20 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
 
   const exportProjects = () => {
     const rows = [
-      ["项目名称", "游戏", "客户", "类型", "负责人", "当前阶段", "启动日期", "方案提交", "讲标日期", "状态", "风险"],
+      ["项目名称", "游戏", "客户", "类型", "游戏类型", "客户类型", "投标时间", "投标金额", "客户核心需求", "投标结果", "未中标原因分类", "未中标原因", "负责人", "当前阶段", "启动日期", "方案提交", "讲标日期", "状态", "风险"],
       ...filteredProjects.map((project) => [
         project.name,
         project.game,
         project.client,
         project.type,
+        projectGameType(project),
+        projectClientType(project),
+        project.bidDate || project.start,
+        project.bidAmount ?? "",
+        project.clientCoreNeeds ?? "",
+        projectBidResult(project),
+        project.lostReasonCategory ?? "",
+        project.lostReasonDetail ?? "",
         memberName(members, project.ownerId, project.owner),
         project.stage,
         project.start,
@@ -1142,6 +1192,15 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
             <Field label="游戏名称" value={form.game} onChange={(value) => setForm({ ...form, game: value })} />
             <Field label="客户名称" value={form.client} onChange={(value) => setForm({ ...form, client: value })} />
             <Field label="项目类型" value={form.type} onChange={(value) => setForm({ ...form, type: value })} />
+            <Field label="游戏类型" value={form.gameType} onChange={(value) => setForm({ ...form, gameType: value })} />
+            <label>
+              <span>客户类型</span>
+              <select value={form.clientType} onChange={(event) => setForm({ ...form, clientType: event.target.value })}>
+                {clientTypeOptions.map((type) => <option key={type}>{type}</option>)}
+              </select>
+            </label>
+            <Field label="投标金额（万）" type="number" value={form.bidAmount} onChange={(value) => setForm({ ...form, bidAmount: value })} />
+            <Field label="客户核心需求" value={form.clientCoreNeeds} onChange={(value) => setForm({ ...form, clientCoreNeeds: value })} />
             <label>
               <span>项目负责人</span>
               <select value={form.ownerId} onChange={(event) => setForm({ ...form, ownerId: event.target.value })}>
@@ -1175,6 +1234,7 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
           {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
         </select>
       </div>
+      <BidAnalyticsPanel projects={projects} analysis={bidAnalysis} period={bidPeriod} setPeriod={setBidPeriod} />
       <ProjectGanttOverview projects={filteredProjects} members={members} openProject={openProject} />
       <Card title="项目列表">
         <table>
@@ -1214,6 +1274,103 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
         </table>
       </Card>
     </section>
+  );
+}
+
+function BidAnalyticsPanel({ projects, analysis, period, setPeriod }: { projects: Project[]; analysis: ReturnType<typeof buildBidAnalysis>; period: "月" | "季度" | "年"; setPeriod: (period: "月" | "季度" | "年") => void }) {
+  const total = analysis.finished.length;
+  const rate = winRate(analysis.won.length, total);
+  const maxTrendTotal = Math.max(...analysis.trend.map((item) => item.total), 1);
+  const targetProject = projects.find((project) => projectBidResult(project) === "跟进中") ?? projects[0];
+  const targetAdvice = targetProject
+    ? [
+        `${projectClientType(targetProject)}投标建议：${projectClientType(targetProject) === "大厂" ? "重点突出数据支撑、渠道资源和执行确定性" : "强化创意差异化、报价弹性和可快速落地的样板玩法"}。`,
+        targetProject.bidAmount ? `报价参考：当前投标金额 ${targetProject.bidAmount} 万，建议对照同客户类型历史中标项目拆分权益明细和可选包。` : "报价参考：建议补充投标金额，便于和历史同类项目比较。",
+        analysis.lostReasons[0] ? `风险规避：近期未中标高频原因是“${analysis.lostReasons[0].key}”，本项目需要提前做专项检查。` : "风险规避：未中标原因样本较少，建议先补齐历史客户反馈。",
+      ]
+    : ["暂无项目可生成投标优化建议。"];
+
+  return (
+    <Card
+      title="中标率统计与分析"
+      action={
+        <div className="segmented-control">
+          {(["月", "季度", "年"] as const).map((item) => <button key={item} className={period === item ? "active" : ""} onClick={() => setPeriod(item)}>{item}</button>)}
+        </div>
+      }
+    >
+      <div className="bid-metric-grid">
+        <Metric label="已完结投标" value={total} tone="blue" />
+        <Metric label="中标项目" value={analysis.won.length} tone="green" />
+        <Metric label="未中标项目" value={analysis.lost.length} tone="red" />
+        <div className="metric metric-orange"><span>中标率</span><strong>{rate}%</strong></div>
+      </div>
+      <div className="bid-dashboard">
+        <div className="trend-panel">
+          <h3>中标率趋势</h3>
+          <div className="trend-chart">
+            {analysis.trend.length ? analysis.trend.map((item, index) => {
+              const previous = analysis.trend[index - 1];
+              const change = previous ? item.rate - previous.rate : 0;
+              return (
+                <div className="trend-item" key={item.key}>
+                  <div className="trend-bars">
+                    <span className="trend-volume" style={{ height: `${Math.max(12, (item.total / maxTrendTotal) * 100)}%` }} />
+                    <span className="trend-rate" style={{ height: `${Math.max(8, item.rate)}%` }} />
+                  </div>
+                  <strong>{item.rate}%</strong>
+                  <small>{item.key}</small>
+                  {previous && <em className={change >= 0 ? "up" : "down"}>{change >= 0 ? "+" : ""}{change}</em>}
+                </div>
+              );
+            }) : <div className="empty-inline">暂无已完结投标数据</div>}
+          </div>
+        </div>
+        <div className="ai-report compact-report">
+          <h3>AI 统计解读</h3>
+          <ul>
+            {analysis.report.map((line) => <li key={line}>{line}</li>)}
+          </ul>
+        </div>
+      </div>
+      <div className="bid-grid">
+        <BidStatsTable title="按客户类型" rows={analysis.byClient} />
+        <BidStatsTable title="按游戏类型" rows={analysis.byGame} />
+        <BidStatsTable title="未中标原因" rows={analysis.lostReasons} />
+      </div>
+      <div className="bid-insight-grid">
+        <div className="insight-box">
+          <h3>中标关键因素清单</h3>
+          {analysis.factors.length ? analysis.factors.map((factor) => <span key={factor}>{factor}</span>) : <p className="muted">请在中标项目中补充中标因素，系统会自动沉淀可复用清单。</p>}
+        </div>
+        <div className="insight-box">
+          <h3>投标优化建议</h3>
+          {targetAdvice.map((line) => <p key={line}>{line}</p>)}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function BidStatsTable({ title, rows }: { title: string; rows: Array<{ key: string; total: number; won: number; lost: number; rate: number }> }) {
+  return (
+    <div className="mini-table">
+      <h3>{title}</h3>
+      <table>
+        <thead>
+          <tr><th>维度</th><th>投标</th><th>中标率</th></tr>
+        </thead>
+        <tbody>
+          {rows.length ? rows.map((row) => (
+            <tr key={row.key}>
+              <td>{row.key}</td>
+              <td>{row.total}</td>
+              <td>{row.rate}%</td>
+            </tr>
+          )) : <tr><td colSpan={3}>暂无数据</td></tr>}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1399,6 +1556,13 @@ function ProjectDetail({ project, members, projects, resources, openResource, se
               <Field label="游戏名称" value={project.game} onChange={(value) => updateProjectField("game", value)} />
               <Field label="客户名称" value={project.client} onChange={(value) => updateProjectField("client", value)} />
               <Field label="项目类型" value={project.type} onChange={(value) => updateProjectField("type", value)} />
+              <Field label="游戏类型" value={project.gameType || ""} onChange={(value) => updateProjectField("gameType", value)} />
+              <label>
+                <span>客户类型</span>
+                <select value={projectClientType(project)} onChange={(event) => updateProjectField("clientType", event.target.value)}>
+                  {clientTypeOptions.map((type) => <option key={type}>{type}</option>)}
+                </select>
+              </label>
               <label>
                 <span>负责人</span>
                 <select value={project.ownerId ?? ""} onChange={(event) => updateProjectOwner(event.target.value ? Number(event.target.value) : undefined)}>
@@ -1411,6 +1575,24 @@ function ProjectDetail({ project, members, projects, resources, openResource, se
               <Field label="方案提交" type="date" value={project.submit} onChange={(value) => updateProjectField("submit", value)} />
               <Field label="讲标日期" type="date" value={project.pitch} onChange={(value) => updateProjectField("pitch", value)} />
               <Field label="项目状态" value={project.status} onChange={(value) => updateProjectField("status", value)} />
+              <Field label="投标时间" type="date" value={project.bidDate || project.start} onChange={(value) => updateProjectField("bidDate", value)} />
+              <Field label="投标金额（万）" type="number" value={`${project.bidAmount ?? ""}`} onChange={(value) => updateProjectField("bidAmount", Number(value) || undefined)} />
+              <Field label="客户核心需求" value={project.clientCoreNeeds || ""} onChange={(value) => updateProjectField("clientCoreNeeds", value)} />
+              <label>
+                <span>投标结果</span>
+                <select value={projectBidResult(project)} onChange={(event) => updateProjectField("bidResult", event.target.value as BidResult)}>
+                  {bidResultOptions.map((result) => <option key={result}>{result}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>未中标原因分类</span>
+                <select value={project.lostReasonCategory || "其他"} onChange={(event) => updateProjectField("lostReasonCategory", event.target.value as LostReasonCategory)}>
+                  {lostReasonOptions.map((reason) => <option key={reason}>{reason}</option>)}
+                </select>
+              </label>
+              <Field label="未中标原因" value={project.lostReasonDetail || ""} onChange={(value) => updateProjectField("lostReasonDetail", value)} />
+              <Field label="中标关键因素" value={project.winningFactors || ""} onChange={(value) => updateProjectField("winningFactors", value)} />
+              <Field label="竞品情况" value={project.competitorContext || ""} onChange={(value) => updateProjectField("competitorContext", value)} />
             </div>
             <div className="note-box">
               <strong>风险等级：<RiskBadge risk={inferredRisk} /></strong>
@@ -2865,6 +3047,73 @@ function timelineStyle(item: GanttTimelineItem, timeline: ReturnType<typeof buil
 function projectProgress(project: Project) {
   if (!project.tasks.length) return 0;
   return Math.round(project.tasks.reduce((total, task) => total + task.progress, 0) / project.tasks.length);
+}
+
+function projectBidResult(project: Project): BidResult {
+  if (project.bidResult) return project.bidResult;
+  if (project.status.includes("中标")) return "中标";
+  if (project.status.includes("未中标") || project.status.includes("失败")) return "未中标";
+  return "跟进中";
+}
+
+function projectClientType(project: Project) {
+  return project.clientType || (project.client.includes("头部") || project.client.includes("大厂") ? "大厂" : project.client.includes("渠道") ? "渠道方" : "中小厂商");
+}
+
+function projectGameType(project: Project) {
+  return project.gameType || project.type || "未分类";
+}
+
+function periodKey(dateText: string | undefined, period: "月" | "季度" | "年") {
+  const date = parseScheduleDate(dateText || today(), today().slice(0, 4)) ?? new Date(`${today()}T00:00:00`);
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  if (period === "年") return `${year}`;
+  if (period === "季度") return `${year} Q${Math.ceil(month / 3)}`;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function winRate(won: number, total: number) {
+  return total ? Math.round((won / total) * 100) : 0;
+}
+
+function bidStatsBy<T extends string>(projects: Project[], keyGetter: (project: Project) => T) {
+  const groups = new Map<T, { key: T; total: number; won: number; lost: number; rate: number }>();
+  projects.forEach((project) => {
+    const result = projectBidResult(project);
+    if (result === "跟进中") return;
+    const key = keyGetter(project);
+    const group = groups.get(key) ?? { key, total: 0, won: 0, lost: 0, rate: 0 };
+    group.total += 1;
+    if (result === "中标") group.won += 1;
+    if (result === "未中标") group.lost += 1;
+    group.rate = winRate(group.won, group.total);
+    groups.set(key, group);
+  });
+  return Array.from(groups.values()).sort((a, b) => b.total - a.total || b.rate - a.rate);
+}
+
+function buildBidAnalysis(projects: Project[], period: "月" | "季度" | "年") {
+  const finished = projects.filter((project) => projectBidResult(project) !== "跟进中");
+  const won = finished.filter((project) => projectBidResult(project) === "中标");
+  const lost = finished.filter((project) => projectBidResult(project) === "未中标");
+  const trend = bidStatsBy(finished, (project) => periodKey(project.bidDate || project.submit || project.start, period)).sort((a, b) => a.key.localeCompare(b.key));
+  const byClient = bidStatsBy(finished, projectClientType);
+  const byGame = bidStatsBy(finished, projectGameType);
+  const lostReasons = bidStatsBy(lost, (project) => project.lostReasonCategory || "其他");
+  const topLostReason = lostReasons[0];
+  const bestClient = byClient.slice().sort((a, b) => b.rate - a.rate || b.total - a.total)[0];
+  const weakClient = byClient.slice().sort((a, b) => a.rate - b.rate || b.total - a.total)[0];
+  const factors = Array.from(new Set(won.flatMap((project) => (project.winningFactors || project.clientCoreNeeds || `${project.type} ${projectGameType(project)} ${projectClientType(project)}`).split(/[,，、；;。\n]/).map((item) => item.trim()).filter(Boolean)))).slice(0, 8);
+  const latestChange = trend.length >= 2 ? trend[trend.length - 1].rate - trend[trend.length - 2].rate : 0;
+  const report = [
+    `整体中标率 ${winRate(won.length, finished.length)}%，已完结投标 ${finished.length} 个，中标 ${won.length} 个，未中标 ${lost.length} 个。`,
+    trend.length >= 2 ? `最近${period}中标率${latestChange >= 0 ? "上升" : "下降"} ${Math.abs(latestChange)} 个百分点，可能与${topLostReason ? `${topLostReason.key}类问题` : "样本结构变化"}有关。` : "历史样本仍偏少，建议继续补齐近 12 个月投标数据。",
+    topLostReason ? `未中标首要原因是“${topLostReason.key}”，涉及 ${topLostReason.total} 个项目，建议建立专项复盘模板和素材库。` : "暂无明确未中标原因，建议在项目详情中补齐客户反馈和内部复盘。",
+    bestClient ? `${bestClient.key}客户当前中标率 ${bestClient.rate}%，可沉淀为优先复用方法。` : "暂无客户类型维度样本。",
+    weakClient && weakClient.total ? `${weakClient.key}客户中标率 ${weakClient.rate}%，后续投标需强化报价、创意或资源匹配。` : "",
+  ].filter(Boolean);
+  return { finished, won, lost, trend, byClient, byGame, lostReasons, factors, report };
 }
 
 function projectEndDate(project: Project) {

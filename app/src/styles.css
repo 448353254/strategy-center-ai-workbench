@@ -402,6 +402,170 @@ textarea {
   margin: 14px 0 8px;
 }
 
+.segmented-control {
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(23, 33, 43, 0.06);
+}
+
+.segmented-control button {
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 12px;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 900;
+}
+
+.segmented-control button.active {
+  color: white;
+  background: var(--green);
+}
+
+.bid-metric-grid,
+.bid-grid,
+.bid-insight-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.bid-metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.bid-dashboard {
+  display: grid;
+  grid-template-columns: 1.25fr 0.75fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.trend-panel,
+.compact-report,
+.mini-table,
+.insight-box {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.trend-panel h3,
+.mini-table h3,
+.insight-box h3,
+.compact-report h3 {
+  margin: 0 0 12px;
+}
+
+.trend-chart {
+  display: flex;
+  min-height: 210px;
+  gap: 14px;
+  align-items: end;
+  overflow-x: auto;
+  padding-top: 10px;
+}
+
+.trend-item {
+  display: grid;
+  min-width: 72px;
+  gap: 6px;
+  justify-items: center;
+}
+
+.trend-bars {
+  position: relative;
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  width: 34px;
+  height: 128px;
+}
+
+.trend-volume,
+.trend-rate {
+  display: block;
+  width: 14px;
+  border-radius: 999px 999px 4px 4px;
+}
+
+.trend-volume {
+  background: rgba(49, 95, 143, 0.18);
+}
+
+.trend-rate {
+  background: var(--green);
+}
+
+.trend-item strong {
+  font-size: 14px;
+}
+
+.trend-item small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.trend-item em {
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.trend-item em.up {
+  color: var(--green);
+}
+
+.trend-item em.down {
+  color: var(--red);
+}
+
+.bid-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.mini-table table th,
+.mini-table table td {
+  padding: 10px 8px;
+  font-size: 13px;
+}
+
+.bid-insight-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.insight-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: start;
+}
+
+.insight-box h3 {
+  flex-basis: 100%;
+}
+
+.insight-box span {
+  display: inline-flex;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #24453a;
+  background: rgba(47, 125, 91, 0.12);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.insight-box p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .warning-list {
   display: grid;
   gap: 12px;
@@ -1517,6 +1681,10 @@ hr {
   .resource-grid,
   .reference-grid,
   .excel-entry-grid,
+  .bid-metric-grid,
+  .bid-dashboard,
+  .bid-grid,
+  .bid-insight-grid,
   .quick-panel {
     grid-template-columns: 1fr;
   }
