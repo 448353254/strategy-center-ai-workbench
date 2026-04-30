@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>策略中心 AI 工作台项目进度</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1e293b;
+        --muted: #64748b;
+        --line: #d8dee8;
+        --paper: #f7f9fc;
+        --panel: #ffffff;
+        --coal: #26313f;
+        --teal: #0f766e;
+        --green: #15803d;
+        --amber: #b45309;
+        --red: #b91c1c;
+        --blue: #2563eb;
+        --shadow: 0 18px 45px rgba(30, 41, 59, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          "Aptos",
+          "Segoe UI",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .page {
+        min-height: 100vh;
+      }
+
+      .hero {
+        background:
+          linear-gradient(120deg, rgba(38, 49, 63, 0.98), rgba(15, 118, 110, 0.9)),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 92px);
+        color: #fff;
+        padding: 28px clamp(18px, 4vw, 48px) 30px;
+      }
+
+      .hero-inner {
+        max-width: 1240px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+        gap: 28px;
+        align-items: end;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 14px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(32px, 5vw, 58px);
+        line-height: 1.04;
+        max-width: 760px;
+      }
+
+      .hero-copy {
+        margin: 16px 0 0;
+        max-width: 720px;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      .summary-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .summary-item {
+        min-height: 92px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 8px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .summary-item strong {
+        display: block;
+        font-size: 28px;
+      }
+
+      .summary-item span {
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 13px;
+      }
+
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        border-bottom: 1px solid var(--line);
+        background: rgba(247, 249, 252, 0.94);
+        backdrop-filter: blur(12px);
+      }
+
+      .toolbar-inner {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 12px clamp(18px, 4vw, 48px);
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--green);
+        box-shadow: 0 0 0 5px rgba(21, 128, 61, 0.12);
+      }
+
+      .data-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .refresh {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        padding: 0 14px;
+        cursor: pointer;
+      }
+
+      main {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 28px clamp(18px, 4vw, 48px) 48px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .two-col {
+        grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+        margin-top: 18px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .panel-header {
+        padding: 18px 18px 0;
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .panel-header h2,
+      .panel-header h3 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .panel-header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .metric {
+        min-height: 144px;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 10px;
+        font-size: 38px;
+        line-height: 1;
+      }
+
+      .metric small {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .meter {
+        height: 10px;
+        border-radius: 999px;
+        background: #e6ebf2;
+        overflow: hidden;
+      }
+
+      .meter > i {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--teal);
+      }
+
+      .meter[data-tone="green"] > i {
+        background: var(--green);
+      }
+
+      .meter[data-tone="amber"] > i {
+        background: var(--amber);
+      }
+
+      .meter[data-tone="red"] > i {
+        background: var(--red);
+      }
+
+      .roadmap {
+        padding: 18px;
+      }
+
+      .phase {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr) 58px;
+        gap: 14px;
+        align-items: center;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .phase:last-child {
+        border-bottom: 0;
+      }
+
+      .phase-name {
+        font-weight: 700;
+      }
+
+      .phase-desc {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .percent {
+        text-align: right;
+        font-weight: 700;
+      }
+
+      .project-list,
+      .work-list,
+      .risk-list {
+        padding: 10px 18px 18px;
+      }
+
+      .project {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 96px;
+        gap: 14px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .project:last-child {
+        border-bottom: 0;
+      }
+
+      .project-title {
+        margin: 0 0 7px;
+        font-weight: 700;
+      }
+
+      .project-meta,
+      .work-meta {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        border-radius: 999px;
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #fff;
+        white-space: nowrap;
+      }
+
+      .tag.red {
+        background: var(--red);
+      }
+
+      .tag.amber {
+        background: var(--amber);
+      }
+
+      .tag.green {
+        background: var(--green);
+      }
+
+      .tag.blue {
+        background: var(--blue);
+      }
+
+      .work-item {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .work-item:last-child {
+        border-bottom: 0;
+      }
+
+      .work-icon {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: #e9f3f2;
+        color: var(--teal);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .work-title {
+        margin: 0;
+        font-weight: 700;
+      }
+
+      .risk-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .risk-row {
+        display: grid;
+        grid-template-columns: 84px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .risk-row strong {
+        font-size: 14px;
+      }
+
+      .risk-row span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .section-title {
+        margin: 28px 0 12px;
+        font-size: 20px;
+      }
+
+      .empty {
+        color: var(--muted);
+        padding: 18px;
+      }
+
+      @media (max-width: 920px) {
+        .hero-inner,
+        .two-col,
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+
+        .summary-strip {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .toolbar-inner {
+          align-items: stretch;
+          flex-direction: column;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .hero {
+          padding-top: 22px;
+        }
+
+        .summary-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .phase,
+        .project,
+        .risk-row {
+          grid-template-columns: 1fr;
+        }
+
+        .percent {
+          text-align: left;
+        }
+
+        .panel-header {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-inner">
+          <div>
+            <p class="eyebrow">Strategy Center AI Workbench</p>
+            <h1>项目进度一屏看清</h1>
+            <p class="hero-copy">
+              这页把当前产品完成度、真实业务数据、风险项目和下一步交付重点放在同一张工作台上，适合给团队同步，也适合自己快速判断下一步该推哪里。
+            </p>
+          </div>
+          <div class="summary-strip">
+            <div class="summary-item">
+              <strong id="heroBuild">可构建</strong>
+              <span>生产打包状态</span>
+            </div>
+            <div class="summary-item">
+              <strong id="heroStage">MVP</strong>
+              <span>当前阶段</span>
+            </div>
+            <div class="summary-item">
+              <strong id="heroUpdated">--</strong>
+              <span>数据更新时间</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="toolbar">
+        <div class="toolbar-inner">
+          <div class="data-status">
+            <i class="status-dot" aria-hidden="true"></i>
+            <span id="dataStatus">正在读取本地数据...</span>
+          </div>
+          <button class="refresh" type="button" id="refreshButton" aria-label="刷新项目进度数据">刷新数据</button>
+        </div>
+      </div>
+
+      <main>
+        <section class="grid metrics" aria-label="关键指标">
+          <article class="panel metric">
+            <span>功能完成度</span>
+            <strong id="featureScore">--</strong>
+            <div class="meter" data-tone="green"><i id="featureBar" style="width: 0%"></i></div>
+            <small>按已实现模块、后端能力和工程化项估算</small>
+          </article>
+          <article class="panel metric">
+            <span>业务数据</span>
+            <strong id="businessCount">--</strong>
+            <div class="meter" data-tone="green"><i id="businessBar" style="width: 0%"></i></div>
+            <small id="businessText">项目、资料、AI 记录汇总</small>
+          </article>
+          <article class="panel metric">
+            <span>项目风险</span>
+            <strong id="riskCount">--</strong>
+            <div class="meter" data-tone="red"><i id="riskBar" style="width: 0%"></i></div>
+            <small id="riskText">严重和紧急项目数量</small>
+          </article>
+          <article class="panel metric">
+            <span>工程化成熟度</span>
+            <strong id="engineeringScore">--</strong>
+            <div class="meter" data-tone="amber"><i id="engineeringBar" style="width: 0%"></i></div>
+            <small>已能打包，仍需要拆分代码和补测试</small>
+          </article>
+        </section>
+
+        <section class="grid two-col">
+          <article class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>交付路线</h2>
+                <p>把当前状态拆成能给人看的产品阶段。</p>
+              </div>
+              <span class="tag green">可内测</span>
+            </div>
+            <div class="roadmap" id="roadmap"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>当前项目</h2>
+                <p>来自本地工作台数据。</p>
+              </div>
+              <span class="tag blue" id="projectCountTag">0 个项目</span>
+            </div>
+            <div class="project-list" id="projectList"></div>
+          </article>
+        </section>
+
+        <h2 class="section-title">风险与待补强</h2>
+        <section class="grid two-col">
+          <article class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>主要风险</h3>
+                <p>这些会影响从内测走向正式交付。</p>
+              </div>
+            </div>
+            <div class="risk-list" id="riskList"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>最近 AI 操作</h3>
+                <p>能看到哪些流程已经被真实跑过。</p>
+              </div>
+            </div>
+            <div class="work-list" id="workList"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const fallback = {
+        projects: [
+          {
+            name: "星河边境新品上线投标",
+            game: "星河边境",
+            type: "新品上线",
+            stage: "方案制作",
+            submit: "2026-05-08",
+            pitch: "2026-05-10",
+            status: "进行中",
+            risk: "严重",
+            tasks: [
+              { name: "用户与竞品资料整理", status: "进行中", progress: 65 },
+              { name: "方案初稿评审", status: "延期", progress: 20 }
+            ]
+          },
+          {
+            name: "花间旅人周年活动方案",
+            game: "花间旅人",
+            type: "活动推广",
+            stage: "调研洞察",
+            submit: "2026-05-05",
+            pitch: "2026-05-06",
+            status: "进行中",
+            risk: "一般",
+            tasks: [
+              { name: "用户与竞品资料整理", status: "进行中", progress: 65 },
+              { name: "核心策略与创意主题", status: "未开始", progress: 0 }
+            ]
+          }
+        ],
+        resources: [
+          { title: "全文检索测试资料", type: "方案", parseStatus: "成功" },
+          { title: "全明星街球派对整合营销需求", type: "brief", parseStatus: "成功" },
+          { title: "二次元手游新品上线投标方案", type: "方案" },
+          { title: "春节活动整合营销文案库", type: "文案" },
+          { title: "女性向游戏舆情风险复盘", type: "复盘" }
+        ],
+        jobs: [
+          { type: "复用建议", name: "全明星街球派对整合营销需求", status: "成功", source: "资料详情" },
+          { type: "文档解析", name: "真实解析 1 份资料", status: "成功", source: "资料上传" },
+          { type: "人员负载分析", name: "本地规则成员负载与排班建议", status: "成功", source: "人员管理" },
+          { type: "排期生成", name: "星河边境新品上线投标 标准排期", status: "成功", source: "项目详情" }
+        ],
+        members: [
+          { name: "周齐" },
+          { name: "林岚" },
+          { name: "陈舟" },
+          { name: "王西" }
+        ]
+      };
+
+      const roadmap = [
+        { name: "基础框架", desc: "React、Vite、本地 Node API、持久化链路已经跑通。", score: 100 },
+        { name: "核心业务", desc: "项目跟进、排期、人员、资料库、Brief 和大纲功能已形成闭环。", score: 82 },
+        { name: "AI 辅助", desc: "本地规则兜底可用，外部 Brief API 与 Embedding 配置已预留。", score: 76 },
+        { name: "工程化", desc: "生产构建通过，但代码仍集中，缺少项目级自动化测试。", score: 52 },
+        { name: "交付准备", desc: "适合内测演示，正式上线前还要补权限、测试、部署与数据迁移。", score: 58 }
+      ];
+
+      const riskNotes = [
+        { tag: "代码结构", tone: "amber", text: "前端主逻辑集中在单个大文件里，后续迭代会变慢。" },
+        { tag: "测试覆盖", tone: "red", text: "项目内没有看到自己的测试文件，回归风险还需要补一层保护。" },
+        { tag: "数据架构", tone: "amber", text: "当前以本地 JSON 为主，更适合原型和内测，正式协作需要数据库或云端状态。" },
+        { tag: "权限安全", tone: "red", text: "资料敏感等级已经有字段，但还没形成真正的访问控制。" }
+      ];
+
+      function $(id) {
+        return document.getElementById(id);
+      }
+
+      function pct(value) {
+        return `${Math.round(value)}%`;
+      }
+
+      function riskTone(risk) {
+        if (risk === "严重" || risk === "紧急") return "red";
+        if (risk === "一般") return "amber";
+        return "green";
+      }
+
+      function average(numbers) {
+        return numbers.length ? numbers.reduce((sum, value) => sum + value, 0) / numbers.length : 0;
+      }
+
+      async function fetchState(key, fallbackValue) {
+        try {
+          const response = await fetch(`/api/state/${encodeURIComponent(key)}`, { cache: "no-store" });
+          if (!response.ok) return fallbackValue;
+          const data = await response.json();
+          return data.value ?? fallbackValue;
+        } catch {
+          return fallbackValue;
+        }
+      }
+
+      async function loadData() {
+        $("dataStatus").textContent = "正在读取本地数据...";
+        const [projects, resources, jobs, members] = await Promise.all([
+          fetchState("strategy-center-projects", fallback.projects),
+          fetchState("strategy-center-resources", fallback.resources),
+          fetchState("strategy-center-ai-jobs", fallback.jobs),
+          fetchState("strategy-center-members", fallback.members)
+        ]);
+        return { projects, resources, jobs, members };
+      }
+
+      function render(data, sourceText) {
+        const projects = Array.isArray(data.projects) ? data.projects : [];
+        const resources = Array.isArray(data.resources) ? data.resources : [];
+        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        const members = Array.isArray(data.members) ? data.members : [];
+        const tasks = projects.flatMap((project) => Array.isArray(project.tasks) ? project.tasks : []);
+        const severeProjects = projects.filter((project) => ["严重", "紧急"].includes(project.risk));
+        const doneTasks = tasks.filter((task) => task.status === "已完成").length;
+        const taskProgress = tasks.length ? average(tasks.map((task) => Number(task.progress) || 0)) : 0;
+        const featureScore = 82;
+        const engineeringScore = 55;
+
+        $("heroUpdated").textContent = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+        $("dataStatus").textContent = sourceText;
+        $("featureScore").textContent = pct(featureScore);
+        $("featureBar").style.width = pct(featureScore);
+        $("engineeringScore").textContent = pct(engineeringScore);
+        $("engineeringBar").style.width = pct(engineeringScore);
+
+        $("businessCount").textContent = projects.length + resources.length + jobs.length;
+        $("businessText").textContent = `${projects.length} 个项目，${resources.length} 份资料，${jobs.length} 条 AI 记录，${members.length} 名成员`;
+        $("businessBar").style.width = pct(Math.min(100, (projects.length * 12) + (resources.length * 6) + (jobs.length * 2)));
+
+        $("riskCount").textContent = severeProjects.length;
+        $("riskText").textContent = `${tasks.length} 个任务，平均进度 ${Math.round(taskProgress)}%，已完成 ${doneTasks} 个`;
+        $("riskBar").style.width = pct(projects.length ? (severeProjects.length / projects.length) * 100 : 0);
+        $("projectCountTag").textContent = `${projects.length} 个项目`;
+
+        $("roadmap").innerHTML = roadmap.map((item) => `
+          <div class="phase">
+            <div>
+              <div class="phase-name">${item.name}</div>
+              <div class="phase-desc">${item.desc}</div>
+            </div>
+            <div class="meter" data-tone="${item.score >= 75 ? "green" : item.score >= 55 ? "amber" : "red"}"><i style="width: ${item.score}%"></i></div>
+            <div class="percent">${item.score}%</div>
+          </div>
+        `).join("");
+
+        $("projectList").innerHTML = projects.length ? projects.map((project) => {
+          const projectTasks = Array.isArray(project.tasks) ? project.tasks : [];
+          const progress = projectTasks.length ? Math.round(average(projectTasks.map((task) => Number(task.progress) || 0))) : 0;
+          return `
+            <div class="project">
+              <div>
+                <p class="project-title">${project.name || "未命名项目"}</p>
+                <div class="project-meta">${project.game || "-"} / ${project.type || "-"} / ${project.stage || "-"}</div>
+                <div class="project-meta">提交 ${project.submit || "-"}，讲标 ${project.pitch || "-"}，任务均值 ${progress}%</div>
+              </div>
+              <div><span class="tag ${riskTone(project.risk)}">${project.risk || "正常"}</span></div>
+            </div>
+          `;
+        }).join("") : `<div class="empty">还没有项目数据。</div>`;
+
+        $("riskList").innerHTML = riskNotes.map((item) => `
+          <div class="risk-row">
+            <strong><span class="tag ${item.tone}">${item.tag}</span></strong>
+            <span>${item.text}</span>
+          </div>
+        `).join("");
+
+        $("workList").innerHTML = jobs.length ? jobs.slice(0, 7).map((job) => `
+          <div class="work-item">
+            <div class="work-icon">${String(job.type || "AI").slice(0, 1)}</div>
+            <div>
+              <p class="work-title">${job.type || "AI 操作"}</p>
+              <div class="work-meta">${job.name || "-"} / ${job.source || "-"} / ${job.status || "-"}</div>
+            </div>
+          </div>
+        `).join("") : `<div class="empty">还没有 AI 操作记录。</div>`;
+      }
+
+      async function refresh() {
+        const data = await loadData();
+        const usingFallback = data.projects === fallback.projects && data.resources === fallback.resources;
+        render(data, usingFallback ? "本地 API 未返回完整状态，正在展示内置快照" : "已读取本地工作台实时状态");
+      }
+
+      $("refreshButton").addEventListener("click", refresh);
+      refresh();
+    </script>
+  </body>
+</html>

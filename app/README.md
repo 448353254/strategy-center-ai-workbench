@@ -22,6 +22,12 @@ npm run build
 npm run preview
 ```
 
+项目进度页可在开发服务启动后访问：
+
+```text
+http://localhost:5173/progress.html
+```
+
 ## 本地数据
 
 项目、资料、成员、AI 任务、Brief 配置等状态会同步到：
