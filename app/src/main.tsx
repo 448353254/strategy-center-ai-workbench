@@ -8,6 +8,7 @@ type Page =
   | "projectDetail"
   | "people"
   | "marketingResearch"
+  | "research"
   | "resources"
   | "resourceUpload"
   | "resourceDetail"
@@ -220,6 +221,101 @@ interface ParsedAuditSection {
   module: string;
   body: string;
   searchable: string;
+}
+
+type ResearchTab = "user" | "competitor" | "hotspot" | "sentiment" | "archive";
+
+interface UserInsightProfile {
+  id: number;
+  label: string;
+  segmentType: "核心用户" | "潜在用户";
+  age: string;
+  gender: string;
+  region: string;
+  interests: string[];
+  habits: string[];
+  spendingMindset: string;
+  activeHours: string;
+  paymentScenes: string[];
+  retentionCycle: string;
+  needs: string[];
+  painPoints: string[];
+  unmetNeeds: string[];
+  trend: string;
+  marketingAdvice: string[];
+}
+
+interface CompetitorMarketingReport {
+  id: number;
+  name: string;
+  stage: string;
+  keyActions: Array<{ node: string; action: string; effect: string }>;
+  strengths: string[];
+  weaknesses: string[];
+  userPraise: string[];
+  userComplaints: string[];
+  likelyNextMove: string;
+  counterAdvice: string[];
+}
+
+interface HotspotItem {
+  id: number;
+  title: string;
+  category: string;
+  heat: string;
+  duration: string;
+  fitScene: string;
+  fitGames: string[];
+  ideas: Array<{ title: string; execution: string; expected: string }>;
+  copyAssets: string[];
+  scriptIdeas: string[];
+  risks: string[];
+}
+
+interface SentimentInsight {
+  id: number;
+  topic: string;
+  severity: "高" | "中" | "低";
+  impact: string;
+  trigger: string;
+  responseTemplate: string;
+  weeklySummary: string;
+  monthlyAdvice: string[];
+}
+
+interface MarketingArchiveItem {
+  id: number;
+  title: string;
+  type: string;
+  scene: string;
+  node: string;
+  highlight: string[];
+  weaknesses: string[];
+  reusable: string[];
+  avoid: string[];
+  adaptation: string[];
+  metrics: Array<{ label: string; value: string }>;
+}
+
+interface MarketingResearchReportSection {
+  id: string;
+  title: string;
+  summary: string;
+  bullets: string[];
+}
+
+interface MarketingResearchReport {
+  version: "marketing-research-v1";
+  title: string;
+  projectName: string;
+  gameName: string;
+  projectType: string;
+  usage: string;
+  projectFocus: string;
+  briefSummary: string;
+  generatedNote: string;
+  sections: MarketingResearchReportSection[];
+  finalDirection: string[];
 }
 
 const initialTasks: ProjectTask[] = [
@@ -1603,6 +1699,133 @@ function buildContentAuditReport(
   };
 }
 
+function buildUserInsightSummary(profile: UserInsightProfile, projectFocus: string) {
+  const focusHint = projectFocus.trim() ? `结合当前项目“${projectFocus.trim()}”` : "结合当前项目";
+  return `${focusHint}，建议优先围绕${profile.segmentType === "核心用户" ? "核心留存与付费" : "低门槛种草与转化"}设计传播：重点突出${profile.needs.slice(0, 2).join("、")}，避免放大${profile.painPoints.slice(0, 2).join("、")}等负面感知。`;
+}
+
+function buildCompetitorGap(report: CompetitorMarketingReport, projectFocus: string) {
+  const focusHint = projectFocus.trim() ? `围绕“${projectFocus.trim()}”` : "围绕当前项目";
+  return `${focusHint}，不要和 ${report.name} 正面对撞其最强项“${report.strengths[0]}”。更适合从${report.counterAdvice[0]}切入，拉开策略差异。`;
+}
+
+function buildHotspotSummary(item: HotspotItem, projectFocus: string) {
+  const focusHint = projectFocus.trim() ? `如果本次要解决“${projectFocus.trim()}”` : "如果本次想提升传播效率";
+  return `${focusHint}，优先用“${item.ideas[0].title}”切入，这个角度最容易同时兼顾热点参与感和游戏卖点承接。`;
+}
+
+function buildArchiveSummary(item: MarketingArchiveItem, projectFocus: string) {
+  const focusHint = projectFocus.trim() ? `对于“${projectFocus.trim()}”` : "对于当前项目";
+  return `${focusHint}，这份往期内容最值得复用的是${item.reusable.slice(0, 2).join("、")}；最该避开的则是${item.avoid[0]}。`;
+}
+
+function buildMarketingResearchReport({
+  briefOutput,
+  projectFocus,
+  resources,
+  selectedUser,
+  selectedCompetitor,
+  selectedHotspot,
+  selectedArchive,
+}: {
+  briefOutput: string;
+  projectFocus: string;
+  resources: Resource[];
+  selectedUser: UserInsightProfile;
+  selectedCompetitor: CompetitorMarketingReport;
+  selectedHotspot: HotspotItem;
+  selectedArchive: MarketingArchiveItem;
+}): MarketingResearchReport {
+  const projectName = extractBriefField(briefOutput, "项目名称") || extractBriefField(briefOutput, "项目") || "当前项目";
+  const gameName = extractBriefField(briefOutput, "游戏") || extractBriefField(briefOutput, "游戏名称") || projectName;
+  const projectType = extractBriefField(briefOutput, "项目类型") || inferProjectType(briefOutput || projectFocus);
+  const usage = extractBriefField(briefOutput, "方案用途") || inferUsage(briefOutput || projectFocus);
+  const focus = projectFocus.trim() || "拉新转化 + 留存提升";
+  const briefSummary = briefOutput
+    ? summarize(briefOutput)
+    : `当前未读取到 Brief，以下报告先围绕“${focus}”和已选调研模块生成，可在补充 Brief 后一键刷新。`;
+  const generatedNote = briefOutput
+    ? `已结合本次 Brief、${resources.length} 份资料库内容和当前调研模块选择生成。`
+    : `当前按手动填写的项目重点生成，已参考 ${resources.length} 份资料库内容。`;
+
+  return {
+    version: "marketing-research-v1",
+    title: `${gameName}营销调研报告`,
+    projectName,
+    gameName,
+    projectType,
+    usage,
+    projectFocus: focus,
+    briefSummary,
+    generatedNote,
+    sections: [
+      {
+        id: "project-brief",
+        title: "项目与 Brief 摘要",
+        summary: `本次输出围绕“${focus}”展开，适用于${usage}场景，优先解决${projectType}项目在卖点聚焦、用户触达和内容承接上的表达问题。`,
+        bullets: [
+          `项目背景提炼：${briefSummary}`,
+          `建议对外统一使用“${selectedUser.needs[0]} + ${selectedUser.needs[1] || selectedUser.needs[0]}”作为核心传播利益点。`,
+          "如果要进入方案正文，优先把“目标用户、竞品差异、热点玩法、风险预案、可复用案例”串成一条完整叙事线。",
+        ],
+      },
+      {
+        id: "user-insight",
+        title: "目标用户洞察",
+        summary: buildUserInsightSummary(selectedUser, focus),
+        bullets: [
+          `当前优先人群：${selectedUser.label}，活跃高峰在 ${selectedUser.activeHours}，更容易在 ${selectedUser.paymentScenes.slice(0, 2).join("、")} 场景产生转化。`,
+          `核心需求集中在 ${selectedUser.needs.slice(0, 3).join("、")}，传播时要避免放大 ${selectedUser.painPoints.slice(0, 2).join("、")} 等负面感知。`,
+          `潜在增长机会来自 ${selectedUser.unmetNeeds.slice(0, 2).join("、")}，建议把这些点写进创意内容或活动机制。`,
+        ],
+      },
+      {
+        id: "competitor",
+        title: "竞品营销结论",
+        summary: buildCompetitorGap(selectedCompetitor, focus),
+        bullets: [
+          `重点观察竞品：${selectedCompetitor.name}，其强项在 ${selectedCompetitor.strengths.slice(0, 2).join("、")}。`,
+          `竞品暴露的机会点是 ${selectedCompetitor.weaknesses.slice(0, 2).join("、")}，我们可以借此做差异化切入。`,
+          `用户口碑层面，正向反馈集中在 ${selectedCompetitor.userPraise.slice(0, 2).join("、")}，负向反馈集中在 ${selectedCompetitor.userComplaints.slice(0, 2).join("、")}。`,
+        ],
+      },
+      {
+        id: "hotspot",
+        title: "热点对齐建议",
+        summary: buildHotspotSummary(selectedHotspot, focus),
+        bullets: [
+          `推荐优先热点：${selectedHotspot.title}，热度参考 ${selectedHotspot.heat}，适合用于 ${selectedHotspot.fitScene}。`,
+          `可直接落地的创意方向包括 ${selectedHotspot.ideas.slice(0, 2).map((item) => item.title).join("、")}。`,
+          `执行时要控制 ${selectedHotspot.risks.slice(0, 2).join("、")} 等风险，建议同步准备备选角度和降敏文案。`,
+        ],
+      },
+      {
+        id: "sentiment",
+        title: "舆情风险与应对",
+        summary: "当前舆情模块建议把“高优先级预警 + 标准回应模板 + 周期复盘”作为固定动作，避免项目推进时只做热点不做风控。",
+        bullets: sentimentSeed.slice(0, 3).map(
+          (item) => `${item.topic}：影响范围为${item.impact}，建议优先采用“${item.responseTemplate}”这一类快速回应框架。`,
+        ),
+      },
+      {
+        id: "archive",
+        title: "往期内容复用建议",
+        summary: buildArchiveSummary(selectedArchive, focus),
+        bullets: [
+          `优先复用 ${selectedArchive.reusable.slice(0, 2).join("、")} 这些已经验证过的内容骨架。`,
+          `当前不建议延续 ${selectedArchive.avoid.slice(0, 2).join("、")} 这类会稀释传播效率的做法。`,
+          `如果要快速改造为本次 Brief，可直接从 ${selectedArchive.adaptation.slice(0, 2).join("、")} 入手。`,
+        ],
+      },
+    ],
+    finalDirection: [
+      `传播主线建议聚焦“${selectedUser.needs[0]}”与“${selectedUser.needs[1] || selectedUser.needs[0]}”，让内容先打中目标用户，再承接转化。`,
+      `执行层面优先采用“${selectedHotspot.ideas[0]?.title || "热点联动"} + ${selectedCompetitor.counterAdvice[0] || "差异化投放"}”的组合打法。`,
+      "方案落地时，把风险回应、内容复用和阶段复盘一起写入计划，确保这份 Brief 不只好看，也能持续执行。",
+    ],
+  };
+}
+
 function daysUntil(dateText: string) {
   const date = new Date(dateText);
   if (Number.isNaN(date.getTime())) return 999;
@@ -1826,6 +2049,179 @@ const membersSeed: Member[] = [
   { id: 4, name: "王西", role: "执行策划", status: "正常", monthlyCapacity: 7, avgDeliveryDays: 6, skills: ["商务协同", "PPT跟进", "内部评审"] },
 ];
 
+const userInsightSeed: UserInsightProfile[] = [
+  {
+    id: 1,
+    label: "18-25 岁竞技核心玩家",
+    segmentType: "核心用户",
+    age: "18-25 岁",
+    gender: "男性为主，女性竞技玩家增长中",
+    region: "新一线 / 二线城市集中，华东华南活跃更高",
+    interests: ["篮球/电竞赛事", "高光操作短视频", "球队梗文化", "社交开黑"],
+    habits: ["晚间集中开黑", "版本更新后 48 小时高活跃", "偏好先看实机再下载"],
+    spendingMindset: "愿意为手感、战令、角色收藏付费，但对数值不公平极其敏感。",
+    activeHours: "20:00-24:00",
+    paymentScenes: ["新球星上线", "赛季战令", "限定外观", "周年庆折扣包"],
+    retentionCycle: "7 日决定留存，30 日决定是否转为稳定付费用户",
+    needs: ["公平竞技", "操作反馈爽感", "社交荣誉感", "赛事参与感"],
+    painPoints: ["匹配体验波动", "氪金影响平衡", "版本爆点不够集中"],
+    unmetNeeds: ["更强的队伍社交场景", "对高端玩家更有辨识度的荣誉体系"],
+    trend: "近两年竞技用户也越来越看重剧情包装和角色人格标签，不再只吃硬核玩法卖点。",
+    marketingAdvice: ["传播里同时讲手感与热血情绪，不只讲竞技强度。", "重点放大版本高光操作和开黑社交场景。", "在素材里避免过度强调付费优势，优先突出公平性。"],
+  },
+  {
+    id: 2,
+    label: "轻度泛二次元潜在用户",
+    segmentType: "潜在用户",
+    age: "20-29 岁",
+    gender: "男女占比更均衡",
+    region: "一二线城市 + 校园场景渗透更强",
+    interests: ["角色人设", "轻内容追更", "社媒热点参与", "休闲社交"],
+    habits: ["白天碎片浏览内容，晚间转化下载", "先被情绪内容种草后再补玩法信息"],
+    spendingMindset: "冲动消费少，但会为喜欢的角色主题、联动内容和情绪价值买单。",
+    activeHours: "12:00-14:00 / 21:00-23:30",
+    paymentScenes: ["角色主题皮肤", "联动礼包", "节日活动周边"],
+    retentionCycle: "首周看内容陪伴感，次月看活动节奏是否持续",
+    needs: ["轻量入坑门槛", "内容陪伴感", "角色代入感", "可分享的话题点"],
+    painPoints: ["玩法理解门槛高", "进入游戏后缺少引导", "内容素材太硬核导致望而却步"],
+    unmetNeeds: ["更明确的新手友好叙事", "可转发的轻社交互动内容"],
+    trend: "手游潜在用户越来越容易被剧情沉浸感、角色关系和热点话题种草，纯功能卖点转化效率下降。",
+    marketingAdvice: ["素材第一屏先给情绪和角色，第二屏再补玩法。", "针对潜在用户单独做低门槛入坑内容。", "把活动机制翻译成更容易理解的生活化语言。"],
+  },
+];
+
+const competitorSeed: CompetitorMarketingReport[] = [
+  {
+    id: 1,
+    name: "竞品 A：王牌街篮计划",
+    stage: "暑期版本冲量",
+    keyActions: [
+      { node: "版本前 10 天", action: "球星悬念海报 + 倒计时", effect: "社媒讨论量单日破 220 万" },
+      { node: "版本上线周", action: "头部体育 KOL 联动短视频", effect: "总播放破 1000 万，评论区以情怀梗发酵为主" },
+      { node: "版本后第 2 周", action: "校园挑战赛 + 短视频征集", effect: "UGC 投稿增长明显，但转化回流一般" },
+    ],
+    strengths: ["热点包装速度快", "KOL 内容风格统一", "短视频标题和封面很懂圈层语言"],
+    weaknesses: ["活动复用感强", "后半程留量动作弱", "舆情应对偏慢"],
+    userPraise: ["球星内容很有情怀", "短视频创意够上头", "版本宣传节奏热闹"],
+    userComplaints: ["活动看起来像换皮", "游戏内承接感弱", "更新后 bug 较多"],
+    likelyNextMove: "高概率继续绑定节日节点做球星联动，放大情怀内容与校园话题。",
+    counterAdvice: ["不要和它拼同质化球星情怀文案，改打更强的玩家互动场景。", "提前准备版本内承接内容，避免只热闹不转化。", "把稳定性和公平体验作为差异化沟通点。"],
+  },
+  {
+    id: 2,
+    name: "竞品 B：次元旅团物语",
+    stage: "周年庆拉新",
+    keyActions: [
+      { node: "周年预热", action: "角色关系线预告 + 剧情 PV", effect: "女性向社区收藏和二创转发明显增加" },
+      { node: "周年当天", action: "直播发布会 + 联动福利抽奖", effect: "直播峰值在线高，但抽奖引流用户留存一般" },
+      { node: "周年后 1 周", action: "话题挑战 + coser 联动", effect: "站外热度保持，但核心用户吐槽活动创新不足" },
+    ],
+    strengths: ["剧情沉浸感强", "角色人设输出稳定", "社区运营氛围细腻"],
+    weaknesses: ["活动机制创新不足", "转化话术偏弱", "投放回收效率一般"],
+    userPraise: ["角色关系很戳人", "剧情 PV 质量高", "周年直播仪式感足"],
+    userComplaints: ["玩法推进太慢", "福利诚意一般", "联动内容有点重复"],
+    likelyNextMove: "后续会继续加码角色剧情、直播活动和高情绪浓度的内容营销。",
+    counterAdvice: ["如果自身项目不是剧情强项，就不要正面对撞剧情长片。", "可以用更高密度的互动玩法和社交反馈抢用户注意力。", "把玩法和情绪包装一起做，避免被定义为只有功能卖点。"],
+  },
+];
+
+const hotspotSeed: HotspotItem[] = [
+  {
+    id: 1,
+    title: "五一假期社交组局热潮",
+    category: "节日 / 社交",
+    heat: "热搜周边话题高频，讨论量预计持续 5-7 天",
+    duration: "短爆发 + 周末延续",
+    fitScene: "多人开黑、节日版本、回流召回",
+    fitGames: ["竞技", "派对", "社交休闲"],
+    ideas: [
+      { title: "组局战队招募挑战", execution: "围绕假期组队开黑做短视频挑战和队伍海报生成", expected: "提升社交裂变与回流召回" },
+      { title: "假期高光名场面合集", execution: "用玩家投稿 + 官方二创做热点短视频", expected: "提升用户参与感和话题感" },
+      { title: "线下组局地图联动", execution: "联动线下球场 / 门店做城市组局打卡", expected: "强化真实社交场景认知" },
+    ],
+    copyAssets: ["五一组局别只约饭，约一把能上分的。", "假期开黑主场已就位，喊上你的固定队。"] ,
+    scriptIdeas: ["3 镜头对比：普通聚会 vs 假期开黑局", "玩家聊天记录切入，再转进游戏组队场景"],
+    risks: ["节日热点窗口短", "组局类内容容易同质化", "线下玩法需要准备替代方案"],
+  },
+  {
+    id: 2,
+    title: "国风赛事混剪话题升温",
+    category: "游戏圈 / 国风审美",
+    heat: "圈层讨论量高，适合二创内容接入",
+    duration: "中等持续，适合 1-2 周内容发酵",
+    fitScene: "版本更新、角色包装、视觉资产焕新",
+    fitGames: ["国风", "二次元", "动作竞技"],
+    ideas: [
+      { title: "角色国风出场混剪", execution: "结合版本角色或皮肤做国风镜头语言混剪", expected: "提升视觉记忆点与分享率" },
+      { title: "热点梗改写为游戏台词", execution: "把热门评论语境翻译成角色口播文案", expected: "增强社媒传播性" },
+      { title: "线下快闪视觉墙", execution: "将国风热点视觉元素迁移到活动打卡区", expected: "提升线下传播素材质量" },
+    ],
+    copyAssets: ["这次不是蹭国风，是把角色气质真正做进画面。", "让版本更新不只像更新，更像一次出场。"] ,
+    scriptIdeas: ["先给热点视觉，再切角色出场反转", "旁白讲情绪，字幕补玩法利益点"],
+    risks: ["热点审美容易翻车", "如果游戏本体调性不够匹配，会被用户认为硬蹭"],
+  },
+];
+
+const sentimentSeed: SentimentInsight[] = [
+  {
+    id: 1,
+    topic: "版本更新后匹配异常投诉",
+    severity: "高",
+    impact: "TapTap 与微博讨论量 3 小时内激增，核心玩家负面情绪集中。",
+    trigger: "更新后匹配等待时长变长，部分玩家反馈公平性下降。",
+    responseTemplate: "我们已确认版本更新后匹配异常问题，技术正在紧急排查并会在 XX 时间前同步处理进展。感谢大家第一时间反馈，我们会优先保障匹配公平与正常体验。",
+    weeklySummary: "本周舆情以匹配体验和新版本稳定性为核心，负面集中但问题边界清晰。",
+    monthlyAdvice: ["建立版本更新后 6 小时重点监控机制。", "预设公平性相关回应模板，缩短首次发声时间。", "营销内容上线前同步 QA 风险点，减少宣传与体验反差。"],
+  },
+  {
+    id: 2,
+    topic: "节日福利被质疑诚意不足",
+    severity: "中",
+    impact: "社群和评论区吐槽扩散，但尚未破圈。",
+    trigger: "活动奖励与预期不符，用户对比竞品后情绪放大。",
+    responseTemplate: "我们收到大家对节日福利设置的反馈，运营与项目组会结合本次意见尽快优化后续发放节奏，并在 XX 时间前同步具体调整方案。",
+    weeklySummary: "福利预期管理不到位，舆情主要由对比情绪驱动。",
+    monthlyAdvice: ["活动前提前校准用户预期，不要让文案承诺高于实际奖励。", "福利说明页写清发放逻辑，减少误解空间。", "针对核心用户和回流用户拆分不同激励。"],
+  },
+];
+
+const archiveSeed: MarketingArchiveItem[] = [
+  {
+    id: 1,
+    title: "春节回流红包局活动",
+    type: "节日活动",
+    scene: "回流召回",
+    node: "春节",
+    highlight: ["红包机制直接驱动回流", "老带新链路顺畅", "文案口吻有烟火气"],
+    weaknesses: ["后半段内容疲软", "投放渠道过散", "复盘里缺少留存拆解"],
+    reusable: ["红包裂变机制", "老玩家召回文案结构", "节日社交场景包装"],
+    avoid: ["同一素材反复投放", "活动阶段跨度过长导致疲劳"],
+    adaptation: ["把春节的团圆表达改写成新品预约组队语境。", "弱化红包利益点，增强版本新内容诱因。", "把回流话术改成“老队友归队”型社交召回。"],
+    metrics: [
+      { label: "回流率", value: "18%" },
+      { label: "裂变分享率", value: "26%" },
+      { label: "7 日留存", value: "11%" },
+    ],
+  },
+  {
+    id: 2,
+    title: "周年庆角色 PV 共创",
+    type: "内容营销",
+    scene: "品牌拉升",
+    node: "周年庆",
+    highlight: ["角色高光切片传播强", "UGC 二创跟进快", "评论区共鸣度高"],
+    weaknesses: ["剧情过长导致完播掉得快", "投放版本过多导致主信息发散"],
+    reusable: ["角色高光 15 秒结构", "弹幕式情绪文案", "PV 上线前预热节奏"],
+    avoid: ["先发长片再发切片", "同一天上太多版本导致分流"],
+    adaptation: ["压缩长 PV 为三段短切片，先抛情绪，再给利益点。", "把周年语境替换成新品首发“第一次见面”的出场感。", "把角色卖点和玩法亮点放进同一条片子里，而不是完全拆开。"],
+    metrics: [
+      { label: "PV 播放", value: "1280 万" },
+      { label: "互动率", value: "8.6%" },
+      { label: "评论正向比", value: "74%" },
+    ],
+  },
+];
+
 function App() {
   const [page, setPage] = useState<Page>("home");
   const [projects, setProjects] = usePersistentState<Project[]>("strategy-center-projects", projectsSeed);
@@ -1904,6 +2300,7 @@ function App() {
         {page === "projectDetail" && <ProjectDetail project={selectedProject} initialTab={selectedProjectTab} members={members} projects={projects} resources={resources} openResource={navigateResource} setPage={setPage} setProjects={setProjects} addJob={addJob} />}
         {page === "people" && <PeopleManagement members={members} setMembers={setMembers} projects={projects} openProject={navigateProject} addJob={addJob} />}
         {page === "marketingResearch" && <MarketingResearch addJob={addJob} />}
+        {page === "research" && <MarketingResearchBoard resources={resources} briefOutput={briefOutput} addJob={addJob} />}
         {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} />}
         {page === "resourceUpload" && <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} />}
         {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} />}
@@ -1922,6 +2319,7 @@ function Sidebar({ page, setPage }: { page: Page; setPage: (page: Page) => void 
     { key: "projects", label: "项目跟进", icon: "▦" },
     { key: "people", label: "人员管理", icon: "◉" },
     { key: "marketingResearch", label: "营销调研", icon: "◈" },
+    { key: "research", label: "调研看板", icon: "◌" },
     { key: "brief", label: "方案助手", icon: "✦" },
     { key: "resources", label: "资料库", icon: "◫" },
     { key: "aiJobs", label: "AI 任务记录", icon: "◎" },
@@ -3631,6 +4029,442 @@ function OutlineAssistant({
             ) : (
               <p className="muted">{contentAuditOutput || "粘贴逐页内容后，这里会输出逐页/逐模块检查报告。"}</p>
             )}
+          </Card>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MarketingResearchBoard({
+  resources,
+  briefOutput,
+  addJob,
+}: {
+  resources: Resource[];
+  briefOutput: string;
+  addJob: (type: string, name: string, source: string) => void;
+}) {
+  const [tab, setTab] = useState<ResearchTab>("user");
+  const [projectFocus, setProjectFocus] = useState("暑期版本拉新 + 核心玩家留存");
+  const [selectedUserId, setSelectedUserId] = useState(userInsightSeed[0]?.id ?? 0);
+  const [selectedCompetitorId, setSelectedCompetitorId] = useState(competitorSeed[0]?.id ?? 0);
+  const [selectedHotspotId, setSelectedHotspotId] = useState(hotspotSeed[0]?.id ?? 0);
+  const [selectedArchiveId, setSelectedArchiveId] = useState(archiveSeed[0]?.id ?? 0);
+  const [reportOutput, setReportOutput] = usePersistentState<MarketingResearchReport | null>("strategy-center-research-report-output", null);
+
+  const selectedUser = userInsightSeed.find((item) => item.id === selectedUserId) ?? userInsightSeed[0];
+  const selectedCompetitor = competitorSeed.find((item) => item.id === selectedCompetitorId) ?? competitorSeed[0];
+  const selectedHotspot = hotspotSeed.find((item) => item.id === selectedHotspotId) ?? hotspotSeed[0];
+  const selectedArchive = archiveSeed.find((item) => item.id === selectedArchiveId) ?? archiveSeed[0];
+
+  const archiveMatches = useMemo(() => {
+    const focus = normalizeForMatch(projectFocus);
+    if (!focus) return archiveSeed;
+    return archiveSeed
+      .map((item) => ({
+        item,
+        score: [item.type, item.scene, item.node, item.highlight.join(" "), item.reusable.join(" "), item.adaptation.join(" ")]
+          .join(" ")
+          .split(/\s+/)
+          .reduce((total, token) => (focus.includes(normalizeForMatch(token)) ? total + 1 : total), 0),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .map((entry) => entry.item);
+  }, [projectFocus]);
+
+  const briefSummary = useMemo(() => {
+    if (!briefOutput) return "还没有读取到本次 Brief，点击下方按钮后会先按当前项目重点生成一版调研报告。";
+    return summarize(briefOutput);
+  }, [briefOutput]);
+
+  const generateResearchReport = () => {
+    const report = buildMarketingResearchReport({
+      briefOutput,
+      projectFocus,
+      resources,
+      selectedUser,
+      selectedCompetitor,
+      selectedHotspot,
+      selectedArchive,
+    });
+    setReportOutput(report);
+    addJob("营销调研报告", report.title, "营销调研");
+  };
+
+  return (
+    <section className="page">
+      <PageTitle title="营销调研" subtitle="把用户洞察、竞品、热点、舆情和过往营销内容放到一个独立工作台里。" />
+      <div className="metric-grid">
+        <Metric label="用户分层" value={userInsightSeed.length} tone="blue" />
+        <Metric label="追踪竞品" value={competitorSeed.length} tone="orange" />
+        <Metric label="可用热点" value={hotspotSeed.length} tone="green" />
+        <Metric label="负面预警" value={sentimentSeed.filter((item) => item.severity === "高").length} tone="red" />
+      </div>
+
+      <Card title="调研任务设定">
+        <div className="form-grid">
+          <Field label="当前项目重点" value={projectFocus} onChange={setProjectFocus} />
+          <label>
+            <span>资料库参考量</span>
+            <div className="soft-pill">{resources.length} 份资料可用于调研辅助</div>
+          </label>
+        </div>
+        <div className="note-box">
+          <strong>本次 Brief 摘要</strong>
+          <p>{briefSummary}</p>
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+          <button className="primary-button" onClick={generateResearchReport}>一键生成营销调研报告</button>
+          {reportOutput && <button className="ghost-button" onClick={() => setReportOutput(null)}>清空当前报告</button>}
+        </div>
+        <div className="note-box">
+          <strong>使用方式</strong>
+          <p>先明确本次项目目标，再切到对应模块快速提取可用洞察。每个模块都给你“结论 + 风险/不足 + 可落地建议”，方便直接往方案里搬。</p>
+        </div>
+      </Card>
+
+      <Card title="营销调研报告">
+        {reportOutput ? (
+          <div className="research-report-shell">
+            <div className="research-report-hero">
+              <div>
+                <p className="research-report-kicker">可直接用于方案整理</p>
+                <h3>{reportOutput.title}</h3>
+                <p className="muted">{reportOutput.generatedNote}</p>
+              </div>
+              <div className="tag-row research-report-tags">
+                <span>{reportOutput.projectType}</span>
+                <span>{reportOutput.usage}</span>
+                <span>{reportOutput.projectFocus}</span>
+              </div>
+            </div>
+            <div className="research-grid research-report-grid">
+              {reportOutput.sections.map((section) => (
+                <div key={section.id} className={`research-block research-report-block tone-${section.id}`}>
+                  <div className="research-report-block-head">
+                    <span className="research-report-chip">{section.title}</span>
+                    <h3>{section.title}</h3>
+                  </div>
+                  <p className="research-report-summary">{section.summary}</p>
+                  <ul className="template-list research-report-list">
+                    {section.bullets.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <div className="note-box research-report-final" style={{ marginTop: 16 }}>
+              <strong>最终营销方向</strong>
+              <ul className="template-list research-report-list">
+                {reportOutput.finalDirection.map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state compact">点击上方“一键生成营销调研报告”后，这里会输出一份结合本次 Brief 的完整调研结论。</div>
+        )}
+      </Card>
+
+      <div className="tabs research-tabs">
+        <button className={`tab ${tab === "user" ? "active" : ""}`} onClick={() => setTab("user")}>目标用户洞察</button>
+        <button className={`tab ${tab === "competitor" ? "active" : ""}`} onClick={() => setTab("competitor")}>竞品分析</button>
+        <button className={`tab ${tab === "hotspot" ? "active" : ""}`} onClick={() => setTab("hotspot")}>热点对齐</button>
+        <button className={`tab ${tab === "sentiment" ? "active" : ""}`} onClick={() => setTab("sentiment")}>舆情分析</button>
+        <button className={`tab ${tab === "archive" ? "active" : ""}`} onClick={() => setTab("archive")}>往期营销内容</button>
+      </div>
+
+      {tab === "user" && selectedUser && (
+        <div className="split-panel large-left">
+          <Card title="用户分层库">
+            <div className="research-list">
+              {userInsightSeed.map((item) => (
+                <button
+                  key={item.id}
+                  className={selectedUserId === item.id ? "research-item active" : "research-item"}
+                  onClick={() => setSelectedUserId(item.id)}
+                >
+                  <strong>{item.label}</strong>
+                  <span>{item.segmentType} · {item.activeHours}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+          <Card title="目标用户洞察报告">
+            <div className="tag-row">
+              <span>{selectedUser.segmentType}</span>
+              <span>{selectedUser.age}</span>
+              <span>{selectedUser.region}</span>
+            </div>
+            <p className="muted">{buildUserInsightSummary(selectedUser, projectFocus)}</p>
+            <div className="research-grid">
+              <div className="research-block">
+                <h3>用户画像</h3>
+                <ul className="template-list">
+                  <li>性别：{selectedUser.gender}</li>
+                  <li>兴趣：{selectedUser.interests.join("、")}</li>
+                  <li>游戏习惯：{selectedUser.habits.join("、")}</li>
+                  <li>消费观念：{selectedUser.spendingMindset}</li>
+                  <li>活跃时段：{selectedUser.activeHours}</li>
+                  <li>付费场景：{selectedUser.paymentScenes.join("、")}</li>
+                  <li>留存周期：{selectedUser.retentionCycle}</li>
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>用户需求分析</h3>
+                <strong>核心需求</strong>
+                <div className="tag-row">{selectedUser.needs.map((item) => <span key={item}>{item}</span>)}</div>
+                <strong>痛点</strong>
+                <div className="tag-row">{selectedUser.painPoints.map((item) => <span key={item}>{item}</span>)}</div>
+                <strong>未被满足的需求</strong>
+                <ul className="template-list">
+                  {selectedUser.unmetNeeds.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>偏好趋势与营销建议</h3>
+                <p className="muted">{selectedUser.trend}</p>
+                <ul className="template-list">
+                  {selectedUser.marketingAdvice.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>调研结论总结</h3>
+                <p className="muted">针对 {selectedUser.label}，营销内容要同时回应 {selectedUser.needs.slice(0, 2).join("、")}，并控制 {selectedUser.painPoints.slice(0, 2).join("、")} 带来的负面联想。</p>
+                <p className="muted">核心用户与潜在用户差异：
+                  {selectedUser.segmentType === "核心用户"
+                    ? "核心用户更看重竞技强度、公平体验和社交荣誉；潜在用户更吃角色、内容氛围和低门槛表达。"
+                    : "潜在用户需要先被内容种草，再被玩法说服；核心用户则更在意长期留存和公平感。"}
+                </p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "competitor" && selectedCompetitor && (
+        <div className="split-panel large-left">
+          <Card title="竞品清单">
+            <div className="research-list">
+              {competitorSeed.map((item) => (
+                <button
+                  key={item.id}
+                  className={selectedCompetitorId === item.id ? "research-item active" : "research-item"}
+                  onClick={() => setSelectedCompetitorId(item.id)}
+                >
+                  <strong>{item.name}</strong>
+                  <span>{item.stage}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+          <Card title="竞品营销报告">
+            <p className="muted">{buildCompetitorGap(selectedCompetitor, projectFocus)}</p>
+            <div className="research-grid">
+              <div className="research-block">
+                <h3>竞品营销动作</h3>
+                <div className="timeline-list">
+                  {selectedCompetitor.keyActions.map((item) => (
+                    <div key={`${item.node}-${item.action}`} className="timeline-item">
+                      <strong>{item.node}</strong>
+                      <p>{item.action}</p>
+                      <span>{item.effect}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="research-block">
+                <h3>优劣势分析</h3>
+                <strong>优势</strong>
+                <ul className="template-list">
+                  {selectedCompetitor.strengths.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+                <strong>劣势</strong>
+                <ul className="template-list">
+                  {selectedCompetitor.weaknesses.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>用户口碑分析</h3>
+                <strong>正面评价</strong>
+                <div className="tag-row">{selectedCompetitor.userPraise.map((item) => <span key={item}>{item}</span>)}</div>
+                <strong>负面评价</strong>
+                <div className="tag-row">{selectedCompetitor.userComplaints.map((item) => <span key={item}>{item}</span>)}</div>
+              </div>
+              <div className="research-block">
+                <h3>趋势预判与应对</h3>
+                <p className="muted">{selectedCompetitor.likelyNextMove}</p>
+                <ul className="template-list">
+                  {selectedCompetitor.counterAdvice.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "hotspot" && selectedHotspot && (
+        <div className="split-panel large-left">
+          <Card title="热点池">
+            <div className="research-list">
+              {hotspotSeed.map((item) => (
+                <button
+                  key={item.id}
+                  className={selectedHotspotId === item.id ? "research-item active" : "research-item"}
+                  onClick={() => setSelectedHotspotId(item.id)}
+                >
+                  <strong>{item.title}</strong>
+                  <span>{item.category} · {item.duration}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+          <Card title="热点对齐工作台">
+            <div className="tag-row">
+              <span>{selectedHotspot.category}</span>
+              <span>{selectedHotspot.heat}</span>
+              <span>{selectedHotspot.fitScene}</span>
+            </div>
+            <p className="muted">{buildHotspotSummary(selectedHotspot, projectFocus)}</p>
+            <div className="research-grid">
+              <div className="research-block">
+                <h3>热点筛选匹配</h3>
+                <p className="muted">适配游戏类型：{selectedHotspot.fitGames.join("、")}</p>
+                <p className="muted">持续时间：{selectedHotspot.duration}</p>
+                <p className="muted">建议使用场景：{selectedHotspot.fitScene}</p>
+              </div>
+              <div className="research-block">
+                <h3>热点灵感库</h3>
+                <div className="timeline-list">
+                  {selectedHotspot.ideas.map((item) => (
+                    <div key={item.title} className="timeline-item">
+                      <strong>{item.title}</strong>
+                      <p>{item.execution}</p>
+                      <span>{item.expected}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="research-block">
+                <h3>素材库</h3>
+                <strong>文案 / 图片思路</strong>
+                <ul className="template-list">
+                  {selectedHotspot.copyAssets.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+                <strong>短视频脚本框架</strong>
+                <ul className="template-list">
+                  {selectedHotspot.scriptIdeas.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>热点风险提示</h3>
+                <ul className="template-list">
+                  {selectedHotspot.risks.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "sentiment" && (
+        <div className="split-panel large-left">
+          <Card title="舆情预警池">
+            <div className="research-list">
+              {sentimentSeed.map((item) => (
+                <div key={item.id} className="research-item static">
+                  <strong>{item.topic}</strong>
+                  <span>风险等级：{item.severity} · {item.impact}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card title="舆情分析与建议">
+            <div className="research-grid">
+              {sentimentSeed.map((item) => (
+                <div key={item.id} className="research-block">
+                  <div className="tag-row">
+                    <span>{item.severity === "高" ? "高优先级预警" : item.severity === "中" ? "中优先级观察" : "低优先级跟踪"}</span>
+                  </div>
+                  <h3>{item.topic}</h3>
+                  <p className="muted">触发原因：{item.trigger}</p>
+                  <p className="muted">影响范围：{item.impact}</p>
+                  <div className="note-box compact-note">
+                    <strong>官方回应模板</strong>
+                    <p>{item.responseTemplate}</p>
+                  </div>
+                  <strong>周期总结</strong>
+                  <p className="muted">{item.weeklySummary}</p>
+                  <ul className="template-list">
+                    {item.monthlyAdvice.map((advice) => <li key={advice}>{advice}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "archive" && selectedArchive && (
+        <div className="split-panel large-left">
+          <Card title="过往内容库">
+            <div className="research-list">
+              {archiveMatches.map((item) => (
+                <button
+                  key={item.id}
+                  className={selectedArchiveId === item.id ? "research-item active" : "research-item"}
+                  onClick={() => setSelectedArchiveId(item.id)}
+                >
+                  <strong>{item.title}</strong>
+                  <span>{item.type} · {item.scene} · {item.node}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+          <Card title="往期营销内容分析">
+            <p className="muted">{buildArchiveSummary(selectedArchive, projectFocus)}</p>
+            <div className="research-grid">
+              <div className="research-block">
+                <h3>过往内容分类整理</h3>
+                <div className="tag-row">
+                  <span>{selectedArchive.type}</span>
+                  <span>{selectedArchive.scene}</span>
+                  <span>{selectedArchive.node}</span>
+                </div>
+                <strong>亮点</strong>
+                <ul className="template-list">
+                  {selectedArchive.highlight.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+                <strong>不足</strong>
+                <ul className="template-list">
+                  {selectedArchive.weaknesses.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>参考提炼</h3>
+                <strong>可复用</strong>
+                <div className="tag-row">{selectedArchive.reusable.map((item) => <span key={item}>{item}</span>)}</div>
+                <strong>需规避</strong>
+                <div className="tag-row">{selectedArchive.avoid.map((item) => <span key={item}>{item}</span>)}</div>
+              </div>
+              <div className="research-block">
+                <h3>内容适配建议</h3>
+                <ul className="template-list">
+                  {selectedArchive.adaptation.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div className="research-block">
+                <h3>数据关联分析</h3>
+                <div className="research-metric-stack">
+                  {selectedArchive.metrics.map((item) => (
+                    <div key={item.label} className="research-metric-line">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+                <p className="muted">建议优先复用高互动、高共鸣的内容骨架，再按当前项目的节点和人群重新改写表达。</p>
+              </div>
+            </div>
           </Card>
         </div>
       )}
