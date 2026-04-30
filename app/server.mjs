@@ -413,18 +413,20 @@ async function handleBriefFiles(req, res) {
 }
 
 async function handleResourceSearch(req, res) {
-  const { query, filters = {} } = await readJson(req);
+  const { query, filters = {}, resources: clientResources = [], mode = "natural", context = "" } = await readJson(req);
   const db = await readDb();
   const settings = { ...defaultSearchSettings, ...(db["strategy-center-search-settings"] || {}) };
-  const resources = Array.isArray(db["strategy-center-resources"]) ? db["strategy-center-resources"] : [];
-  const keywords = keywordList(query);
+  const dbResources = Array.isArray(db["strategy-center-resources"]) ? db["strategy-center-resources"] : [];
+  const resources = dbResources.length ? dbResources : Array.isArray(clientResources) ? clientResources : [];
+  const searchQuery = [query, context].filter(Boolean).join(" ");
+  const keywords = keywordList(searchQuery);
 
   if (!keywords.length && !Object.values(filters).some(Boolean)) {
-    sendJson(res, 200, { results: resources.map((resource) => ({ resource, score: 0, snippets: [] })) });
+    sendJson(res, 200, { results: resources.map((resource) => ({ resource, score: 0, snippets: [], matchType: resourceMatchType(resource), recommendation: resourceRecommendation(resource, mode, searchQuery) })) });
     return;
   }
 
-  const queryEmbedding = await embedWithSettings(query, settings);
+  const queryEmbedding = await embedWithSettings(searchQuery, settings);
   const useSemantic = settings.mode !== "keyword";
   const results = resources
     .filter((resource) =>
@@ -438,6 +440,7 @@ async function handleResourceSearch(req, res) {
       const tags = Array.isArray(resource.tags) ? resource.tags.join(" ") : "";
       const summary = resource.summary || "";
       const content = resource.content || "";
+      const typeBoost = matchIntentBoost(resource, searchQuery, mode);
       const keywordScore = keywords.reduce((total, keyword) => {
         return total +
           countMatches(title, keyword) * 12 +
@@ -450,19 +453,104 @@ async function handleResourceSearch(req, res) {
         ? chunks.map((chunk) => ({ chunk, similarity: cosineSimilarity(queryEmbedding, chunk.embedding || embedText(chunk.text)) })).sort((a, b) => b.similarity - a.similarity)
         : [];
       const semanticScore = useSemantic ? semanticMatches[0]?.similarity || 0 : 0;
-      const score = keywordScore + Math.round(semanticScore * 100);
+      const score = keywordScore + Math.round(semanticScore * 100) + typeBoost;
       const keywordSnippets = keywords
         .map((keyword) => makeSnippet(content || summary || title, keyword))
         .filter(Boolean)
         .slice(0, 3);
       const semanticSnippets = semanticMatches.filter((item) => item.similarity > 0).slice(0, 2).map((item) => item.chunk.text.slice(0, 180));
       const snippets = Array.from(new Set([...keywordSnippets, ...semanticSnippets])).slice(0, 3);
-      return { resource, score, keywordScore, semanticScore, searchMode: settings.mode, snippets };
+      return {
+        resource,
+        score,
+        keywordScore,
+        semanticScore,
+        searchMode: settings.mode,
+        snippets,
+        matchType: resourceMatchType(resource),
+        recommendation: resourceRecommendation(resource, mode, searchQuery),
+      };
     })
     .filter((item) => !keywords.length || item.score > 0)
     .sort((a, b) => b.score - a.score || String(b.resource.uploadedAt || "").localeCompare(String(a.resource.uploadedAt || "")));
 
   sendJson(res, 200, { results });
+}
+
+function resourceMatchType(resource) {
+  const text = `${resource.type || ""} ${resource.title || ""} ${(resource.tags || []).join(" ")} ${resource.summary || ""} ${resource.content || ""}`;
+  if (/案例|复盘|中标|爆款|优秀|标杆/.test(text)) return "案例";
+  if (/话术|文案|口播|脚本|标题|slogan/i.test(text)) return "话术";
+  if (/数据|报表|指标|预算|roi|cpm|转化|投放/i.test(text)) return "数据";
+  if (/模板|框架|结构|母版|ppt/i.test(text)) return "模板";
+  if (/素材|图片|视频|pv|kv|海报/i.test(text)) return "素材";
+  return "资产";
+}
+
+function matchIntentBoost(resource, query, mode) {
+  const matchType = resourceMatchType(resource);
+  const source = `${query || ""}`.toLowerCase();
+  let boost = 0;
+  if (/案例|参考|相似|优秀|爆款|复盘/.test(source) && matchType === "案例") boost += 24;
+  if (/话术|文案|口播|脚本|标题/.test(source) && matchType === "话术") boost += 24;
+  if (/数据|预算|指标|转化|roi|cpm|投放/.test(source) && matchType === "数据") boost += 24;
+  if (/模板|ppt|框架|结构/.test(source) && matchType === "模板") boost += 24;
+  if (/素材|图片|视频|pv|kv|海报/.test(source) && matchType === "素材") boost += 24;
+  if (mode === "recommend" && /方案|投标|项目|需求|brief/i.test(source)) boost += 10;
+  if (mode === "similar" && /创意|内容|传播|玩法|主题/.test(source)) boost += 10;
+  return boost;
+}
+
+function resourceRecommendation(resource, mode, query) {
+  const matchType = resourceMatchType(resource);
+  const title = resource.title || "该资料";
+  if (mode === "recommend") return `${title} 可作为当前需求的${matchType}参考，优先复用其中的结构、表达或执行经验。`;
+  if (mode === "similar") return `${title} 与当前创作内容存在相似语义，可用于对标表达方式、素材方向和内容组织。`;
+  return `${title} 命中${matchType}线索，可继续查看正文片段确认适配度。`;
+}
+
+async function handleErpResources(req, res) {
+  const db = await readDb();
+  const config = db["strategy-center-erp-config"] || {};
+  sendJson(res, 200, {
+    connected: false,
+    config: {
+      endpoint: config.endpoint || "",
+      authType: config.authType || "bearer",
+      syncMode: config.syncMode || "manual",
+    },
+    resources: [],
+    message: "ERP 资料库接口已预留。接入时将 ERP 返回字段映射为 Resource，并写入 strategy-center-resources。",
+    expectedMapping: {
+      id: "ERP 资料唯一 ID",
+      title: "资料标题",
+      type: "资产/案例/话术/数据/素材/模板",
+      summary: "摘要",
+      content: "正文或解析文本",
+      tags: "标签数组",
+      uploader: "创建人",
+      uploadedAt: "更新时间",
+      visibility: "权限范围",
+      sensitive: "敏感等级",
+      fileUrl: "附件下载地址",
+    },
+  });
+}
+
+async function handleErpSync(req, res) {
+  const body = await readJson(req);
+  const db = await readDb();
+  db["strategy-center-erp-config"] = {
+    ...(db["strategy-center-erp-config"] || {}),
+    ...(body.config || {}),
+    lastSyncRequestedAt: new Date().toISOString(),
+  };
+  await writeDb(db);
+  sendJson(res, 202, {
+    ok: true,
+    synced: 0,
+    message: "ERP 同步接口已预留，当前未配置真实 ERP 连接。后续在这里拉取 ERP 资料并合并进资料库索引。",
+  });
 }
 
 async function handleSearchSettings(req, res) {
@@ -625,6 +713,16 @@ createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/resources/search") {
       await handleResourceSearch(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/erp/resources") {
+      await handleErpResources(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/erp/sync") {
+      await handleErpSync(req, res);
       return;
     }
 

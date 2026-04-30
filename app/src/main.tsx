@@ -18,6 +18,7 @@ type Page =
   | "settings";
 
 type OutlineTab = "template" | "audit";
+type AssistantTab = "brief" | "template";
 
 type Risk = "正常" | "一般" | "紧急" | "严重";
 type TaskStatus = "未开始" | "进行中" | "已完成" | "延期" | "暂停";
@@ -2235,6 +2236,7 @@ function App() {
   const [outlineOutput, setOutlineOutput] = usePersistentState("strategy-center-outline-output", "");
   const [contentAuditOutput, setContentAuditOutput] = usePersistentState("strategy-center-content-audit-output", "");
   const [outlineTab, setOutlineTab] = useState<OutlineTab>("template");
+  const [assistantTab, setAssistantTab] = useState<AssistantTab>("brief");
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const selectedResource = resources.find((resource) => resource.id === selectedResourceId) ?? resources[0];
 
@@ -2277,7 +2279,14 @@ function App() {
 
   const openOutline = (tab: OutlineTab = "template") => {
     setOutlineTab(tab);
-    setPage("outline");
+    setAssistantTab("template");
+    setPage("brief");
+  };
+
+  const openAssistant = (tab: AssistantTab = "brief") => {
+    setAssistantTab(tab);
+    if (tab === "template") setOutlineTab("template");
+    setPage("brief");
   };
 
   const deleteResource = (resourceId: number) => {
@@ -2294,8 +2303,8 @@ function App() {
     <div className="app-shell">
       <Sidebar page={page} setPage={setPage} />
       <main className="workspace">
-        <Topbar />
-        {page === "home" && <Home projects={projects} members={members} jobs={jobs} setPage={setPage} openProject={navigateProject} openOutline={openOutline} />}
+        <Topbar projects={projects} resources={resources} jobs={jobs} setPage={setPage} openProject={navigateProject} openResource={navigateResource} />
+        {page === "home" && <Home projects={projects} members={members} jobs={jobs} setPage={setPage} openProject={navigateProject} openAssistant={openAssistant} openOutline={openOutline} />}
         {page === "projects" && <Projects projects={projects} members={members} openProject={navigateProject} setProjects={setProjects} addJob={addJob} />}
         {page === "projectDetail" && <ProjectDetail project={selectedProject} initialTab={selectedProjectTab} members={members} projects={projects} resources={resources} openResource={navigateResource} setPage={setPage} setProjects={setProjects} addJob={addJob} />}
         {page === "people" && <PeopleManagement members={members} setMembers={setMembers} projects={projects} openProject={navigateProject} addJob={addJob} />}
@@ -2304,8 +2313,45 @@ function App() {
         {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} />}
         {page === "resourceUpload" && <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} />}
         {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} />}
-        {page === "brief" && <BriefAssistant briefOutput={briefOutput} setBriefOutput={setBriefOutput} projects={projects} resources={resources} setPage={setPage} openOutline={openOutline} addJob={addJob} />}
-        {page === "outline" && <OutlineAssistant briefOutput={briefOutput} resources={resources} outlineOutput={outlineOutput} setOutlineOutput={setOutlineOutput} contentAuditOutput={contentAuditOutput} setContentAuditOutput={setContentAuditOutput} entryTab={outlineTab} addJob={addJob} />}
+        {page === "brief" && (
+          <SchemeAssistant
+            activeTab={assistantTab}
+            setActiveTab={setAssistantTab}
+            briefOutput={briefOutput}
+            setBriefOutput={setBriefOutput}
+            projects={projects}
+            resources={resources}
+            setPage={setPage}
+            openOutline={openOutline}
+            outlineOutput={outlineOutput}
+            setOutlineOutput={setOutlineOutput}
+            contentAuditOutput={contentAuditOutput}
+            setContentAuditOutput={setContentAuditOutput}
+            outlineTab={outlineTab}
+            addJob={addJob}
+          />
+        )}
+        {page === "outline" && (
+          <SchemeAssistant
+            activeTab="template"
+            setActiveTab={(tab) => {
+              setAssistantTab(tab);
+              setPage("brief");
+            }}
+            briefOutput={briefOutput}
+            setBriefOutput={setBriefOutput}
+            projects={projects}
+            resources={resources}
+            setPage={setPage}
+            openOutline={openOutline}
+            outlineOutput={outlineOutput}
+            setOutlineOutput={setOutlineOutput}
+            contentAuditOutput={contentAuditOutput}
+            setContentAuditOutput={setContentAuditOutput}
+            outlineTab={outlineTab}
+            addJob={addJob}
+          />
+        )}
         {page === "aiJobs" && <AiJobs jobs={jobs} />}
         {page === "settings" && <Settings />}
       </main>
@@ -2352,10 +2398,169 @@ function Sidebar({ page, setPage }: { page: Page; setPage: (page: Page) => void 
   );
 }
 
-function Topbar() {
+type SearchResult =
+  | { id: string; kind: "项目"; title: string; meta: string; detail: string; action: () => void }
+  | { id: string; kind: "任务"; title: string; meta: string; detail: string; action: () => void }
+  | { id: string; kind: "资料"; title: string; meta: string; detail: string; action: () => void }
+  | { id: string; kind: "AI"; title: string; meta: string; detail: string; action: () => void };
+
+function Topbar({
+  projects,
+  resources,
+  jobs,
+  setPage,
+  openProject,
+  openResource,
+}: {
+  projects: Project[];
+  resources: Resource[];
+  jobs: AiJob[];
+  setPage: (page: Page) => void;
+  openProject: (id: number, initialTab?: string) => void;
+  openResource: (id: number) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [focused, setFocused] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
+  const results = useMemo<SearchResult[]>(() => {
+    if (!normalizedQuery) return [];
+    const searchText = (values: Array<string | number | undefined | null | string[]>) =>
+      values
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .map((value) => String(value ?? ""))
+        .join(" ")
+        .toLowerCase();
+    const includesQuery = (values: Array<string | number | undefined | null | string[]>) => searchText(values).includes(normalizedQuery);
+    const projectResults: SearchResult[] = projects
+      .filter((project) =>
+        includesQuery([
+          project.name,
+          project.game,
+          project.client,
+          project.type,
+          project.stage,
+          project.status,
+          project.risk,
+          project.clientCoreNeeds,
+          project.bidResult,
+        ]),
+      )
+      .map((project) => ({
+        id: `project-${project.id}`,
+        kind: "项目",
+        title: project.name,
+        meta: `${project.game} · ${project.stage}`,
+        detail: `${project.client} / ${project.type}`,
+        action: () => openProject(project.id),
+      }));
+    const taskResults: SearchResult[] = projects.flatMap((project) =>
+      project.tasks
+        .filter((task) => includesQuery([task.name, task.phase, task.owner, task.department, task.status, task.risk, task.delayReason, project.name, project.game]))
+        .map((task) => ({
+          id: `task-${project.id}-${task.id}`,
+          kind: "任务" as const,
+          title: task.name,
+          meta: `${project.name} · ${task.status}`,
+          detail: `${task.phase} / ${task.owner} / 截止 ${task.end}`,
+          action: () => openProject(project.id, "排期表"),
+        })),
+    );
+    const resourceResults: SearchResult[] = resources
+      .filter((resource) =>
+        includesQuery([
+          resource.title,
+          resource.type,
+          resource.summary,
+          resource.content,
+          resource.uploader,
+          resource.visibility,
+          resource.sensitive,
+          resource.fileName,
+          resource.tags,
+        ]),
+      )
+      .map((resource) => ({
+        id: `resource-${resource.id}`,
+        kind: "资料",
+        title: resource.title,
+        meta: `${resource.type} · ${resource.uploader}`,
+        detail: resource.summary,
+        action: () => openResource(resource.id),
+      }));
+    const jobResults: SearchResult[] = jobs
+      .filter((job) => includesQuery([job.type, job.name, job.owner, job.createdAt, job.status, job.source]))
+      .map((job) => ({
+        id: `job-${job.id}`,
+        kind: "AI",
+        title: job.name,
+        meta: `${job.type} · ${job.status}`,
+        detail: `${job.source} / ${job.createdAt}`,
+        action: () => setPage("aiJobs"),
+      }));
+    return [...projectResults, ...taskResults, ...resourceResults, ...jobResults].slice(0, 8);
+  }, [jobs, normalizedQuery, openProject, openResource, projects, resources, setPage]);
+
+  const openResult = (result: SearchResult) => {
+    result.action();
+    setQuery("");
+    setFocused(false);
+  };
+  const showPanel = focused && Boolean(query.trim());
+
   return (
     <header className="topbar">
-      <div className="search-box">搜索项目、资料、任务，例如“二次元新品上线方案”</div>
+      <div
+        className="search-shell"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+        }}
+      >
+        <form
+          className="search-box"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (results[0]) openResult(results[0]);
+          }}
+        >
+          <button className="search-submit" type="submit" aria-label="打开第一条搜索结果" disabled={!results.length}>
+            ⌕
+          </button>
+          <input
+            aria-label="搜索项目、资料、任务和 AI 记录"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onFocus={() => setFocused(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setQuery("");
+                setFocused(false);
+              }
+            }}
+            placeholder="搜索项目、资料、任务，例如“二次元新品上线方案”"
+          />
+          {query && (
+            <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => setQuery("")}>
+              ×
+            </button>
+          )}
+        </form>
+        {showPanel && (
+          <div className="search-results" onMouseDown={(event) => event.preventDefault()}>
+            {results.length ? (
+              results.map((result) => (
+                <button key={result.id} className="search-result" onClick={() => openResult(result)}>
+                  <span>{result.kind}</span>
+                  <strong>{result.title}</strong>
+                  <em>{result.meta}</em>
+                  <small>{result.detail}</small>
+                </button>
+              ))
+            ) : (
+              <div className="search-empty">没有找到匹配内容</div>
+            )}
+          </div>
+        )}
+      </div>
       <div className="topbar-actions">
         <div className="avatar">ZY</div>
       </div>
@@ -2369,6 +2574,7 @@ function Home({
   jobs,
   setPage,
   openProject,
+  openAssistant,
   openOutline,
 }: {
   projects: Project[];
@@ -2376,19 +2582,71 @@ function Home({
   jobs: AiJob[];
   setPage: (page: Page) => void;
   openProject: (id: number, initialTab?: string) => void;
+  openAssistant: (tab?: AssistantTab) => void;
   openOutline: (tab?: OutlineTab) => void;
 }) {
-  const overdueTasks = projects.flatMap((project) => project.tasks.filter((task) => task.status === "延期"));
-  const dueTasks = projects.flatMap((project) => project.tasks.filter((task) => task.status !== "已完成"));
+  const allTasks = projects.flatMap((project) => project.tasks);
+  const overdueTasks = allTasks.filter((task) => task.status === "延期");
+  const dueTasks = allTasks.filter((task) => task.status !== "已完成");
+  const activeProjects = projects.filter((project) => project.status !== "已完成");
+  const averageProgress = projects.length ? Math.round(projects.reduce((total, project) => total + projectProgress(project), 0) / projects.length) : 0;
+  const totalBidAmount = projects.reduce((total, project) => total + (project.bidAmount ?? 0), 0);
+  const riskItems = riskOptions.map((risk) => ({
+    label: risk,
+    value: projects.filter((project) => inferProjectRisk(project) === risk).length,
+    tone: risk,
+  }));
+  const statusItems = taskStatusOptions.map((status) => ({
+    label: status,
+    value: allTasks.filter((task) => task.status === status).length,
+  }));
+  const stageItems = Array.from(
+    projects.reduce((stageMap, project) => stageMap.set(project.stage, (stageMap.get(project.stage) ?? 0) + 1), new Map<string, number>()),
+    ([label, value]) => ({ label, value }),
+  );
+  const memberLoadItems = buildMemberLoadStats(members, projects)
+    .map((item) => ({ label: item.member.name, value: item.loadRate, meta: item.loadStatus }))
+    .sort((first, second) => second.value - first.value);
+  const criticalProjects = [...projects]
+    .sort((first, second) => {
+      const rank: Record<Risk, number> = { 严重: 4, 紧急: 3, 一般: 2, 正常: 1 };
+      return rank[inferProjectRisk(second)] - rank[inferProjectRisk(first)] || daysUntil(first.submit) - daysUntil(second.submit);
+    })
+    .slice(0, 4);
 
   return (
     <section className="page">
-      <PageTitle title="首页" subtitle="聚合待办、项目风险和 AI 快捷入口。" />
+      <PageTitle title="策略中心可视化看板" subtitle="项目进度、竞标结果、人员负载和风险预警的实时总览。" />
+      <div className="dashboard-hero">
+        <div>
+          <span>Workbench Overview</span>
+          <h2>{activeProjects.length} 个项目正在推进</h2>
+          <p>平均完成度 {averageProgress}%，累计投标预算 {totalBidAmount} 万。优先关注临近提交节点、延期任务和人员负载高位项目。</p>
+        </div>
+        <div className="hero-orbit" aria-hidden="true">
+          <strong>{averageProgress}%</strong>
+          <span>整体进度</span>
+        </div>
+      </div>
       <div className="metric-grid">
-        <Metric label="进行中项目" value={projects.length} tone="blue" />
+        <Metric label="进行中项目" value={activeProjects.length} tone="blue" />
         <Metric label="我的待办" value={dueTasks.length} tone="green" />
-        <Metric label="即将到期" value={3} tone="orange" />
+        <Metric label="平均进度" value={`${averageProgress}%`} tone="orange" />
         <Metric label="已延期" value={overdueTasks.length} tone="red" />
+      </div>
+      <div className="dashboard-grid">
+        <Card title="项目风险分布">
+          <DonutChart items={riskItems} />
+        </Card>
+        <Card title="任务状态分布">
+          <MiniBarChart items={statusItems} maxLabel="任务数" />
+        </Card>
+        <Card title="阶段漏斗">
+          <MiniBarChart items={stageItems} maxLabel="项目数" />
+        </Card>
+        <Card title="人员负载">
+          <LoadChart items={memberLoadItems} />
+        </Card>
       </div>
       <div className="two-column">
         <Card title="我的待办">
@@ -2396,11 +2654,11 @@ function Home({
         </Card>
         <Card title="风险预警">
           <div className="warning-list">
-            {projects.map((project) => (
+            {criticalProjects.map((project) => (
               <button key={project.id} className="warning-card" onClick={() => openProject(project.id)}>
-                <RiskBadge risk={project.risk} />
+                <RiskBadge risk={inferProjectRisk(project)} />
                 <strong>{project.name}</strong>
-                <span>{project.risk === "紧急" ? "方案评审延期可能影响讲标节点" : "存在轻微排期压缩风险"}</span>
+                <span>{projectRiskReasons(project).slice(0, 2).join("；")}</span>
               </button>
             ))}
           </div>
@@ -2408,8 +2666,8 @@ function Home({
       </div>
       <div className="quick-panel">
         <button onClick={() => setPage("resourceUpload")}>上传资料</button>
-        <button onClick={() => setPage("brief")}>解析 Brief</button>
-        <button onClick={() => openOutline("template")}>生成 PPT 模板</button>
+        <button onClick={() => openAssistant("brief")}>解析 Brief</button>
+        <button onClick={() => openAssistant("template")}>生成 PPT 模板</button>
         <button className="quick-panel-audit" onClick={() => openOutline("audit")}>内容检查报告</button>
         <button onClick={() => setPage("projects")}>新建项目</button>
       </div>
@@ -2417,6 +2675,77 @@ function Home({
         <AiJobs jobs={jobs.slice(0, 3)} embedded />
       </Card>
     </section>
+  );
+}
+
+function MiniBarChart({ items, maxLabel }: { items: Array<{ label: string; value: number }>; maxLabel: string }) {
+  const maxValue = Math.max(...items.map((item) => item.value), 1);
+  return (
+    <div className="mini-bar-chart">
+      {items.map((item) => (
+        <div className="mini-bar-row" key={item.label}>
+          <span>{item.label}</span>
+          <div className="mini-bar-track">
+            <i style={{ width: `${Math.max((item.value / maxValue) * 100, item.value ? 8 : 0)}%` }} />
+          </div>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+      <em>{maxLabel}</em>
+    </div>
+  );
+}
+
+function DonutChart({ items }: { items: Array<{ label: string; value: number; tone: Risk }> }) {
+  const colors: Record<Risk, string> = {
+    正常: "#2f7d5b",
+    一般: "#d6a748",
+    紧急: "#b66a2a",
+    严重: "#b3443e",
+  };
+  const total = Math.max(items.reduce((sum, item) => sum + item.value, 0), 1);
+  let cursor = 0;
+  const segments = items.map((item) => {
+    const start = cursor;
+    const size = (item.value / total) * 360;
+    cursor += size;
+    return `${colors[item.tone]} ${start}deg ${cursor}deg`;
+  });
+
+  return (
+    <div className="donut-panel">
+      <div className="donut" style={{ background: `conic-gradient(${segments.join(", ")})` }}>
+        <strong>{total}</strong>
+        <span>项目</span>
+      </div>
+      <div className="donut-legend">
+        {items.map((item) => (
+          <span key={item.label}>
+            <i style={{ background: colors[item.tone] }} />
+            {item.label} {item.value}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoadChart({ items }: { items: Array<{ label: string; value: number; meta: string }> }) {
+  return (
+    <div className="load-chart">
+      {items.map((item) => (
+        <div className="load-item" key={item.label}>
+          <div>
+            <strong>{item.label}</strong>
+            <span>{item.meta}</span>
+          </div>
+          <div className="load-meter">
+            <i style={{ width: `${Math.min(item.value, 100)}%` }} />
+          </div>
+          <em>{item.value}%</em>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -3084,18 +3413,33 @@ function ProjectDetail({ project, initialTab, members, projects, resources, open
   );
 }
 
+type ResourceSearchMode = "natural" | "recommend" | "similar";
+type ResourceSearchResult = {
+  resource: Resource;
+  score: number;
+  keywordScore?: number;
+  semanticScore?: number;
+  snippets: string[];
+  matchType?: string;
+  recommendation?: string;
+};
+
 function Resources({ resources, openResource, deleteResource, setPage }: { resources: Resource[]; openResource: (id: number) => void; deleteResource: (id: number) => void; setPage: (page: Page) => void }) {
+  const [mode, setMode] = useState<ResourceSearchMode>("natural");
   const [query, setQuery] = useState("");
+  const [context, setContext] = useState("");
   const [filters, setFilters] = useState({
     type: "",
     sensitive: "",
     parseStatus: "",
   });
-  const [searchResults, setSearchResults] = useState<Array<{ resource: Resource; score: number; keywordScore?: number; semanticScore?: number; snippets: string[] }>>([]);
+  const [searchResults, setSearchResults] = useState<ResourceSearchResult[]>([]);
   const [searchMessage, setSearchMessage] = useState("");
+  const [erpMessage, setErpMessage] = useState("ERP 资料库接口已预留，等待配置真实 ERP API。");
+  const effectiveQuery = mode === "natural" ? query : context || query;
 
   const localResults = useMemo(() => {
-    const words = query.trim().split(/\s+/);
+    const words = effectiveQuery.trim().split(/\s+/).filter(Boolean);
     return resources
       .filter((resource) =>
         (!filters.type || resource.type === filters.type) &&
@@ -3103,14 +3447,16 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
         (!filters.parseStatus || (resource.parseStatus || "成功") === filters.parseStatus)
       )
       .map((resource) => {
-        const corpus = `${resource.title}${resource.summary}${resource.content}${resource.tags.join("")}`;
-        const score = query.trim() ? words.reduce((total, word) => total + (corpus.includes(word) ? 1 : 0), 0) : 0;
-        const snippet = query.trim() && resource.content.includes(words[0]) ? resource.content.slice(Math.max(0, resource.content.indexOf(words[0]) - 40), resource.content.indexOf(words[0]) + 100) : resource.summary;
-        return { resource, score, keywordScore: score, semanticScore: 0, snippets: snippet ? [snippet] : [] };
+        const tags = Array.isArray(resource.tags) ? resource.tags.join("") : "";
+        const corpus = `${resource.title}${resource.summary}${resource.content}${tags}`;
+        const score = effectiveQuery.trim() ? words.reduce((total, word) => total + (corpus.includes(word) ? 1 : 0), 0) : 0;
+        const firstWord = words[0] ?? "";
+        const snippet = firstWord && resource.content?.includes(firstWord) ? resource.content.slice(Math.max(0, resource.content.indexOf(firstWord) - 40), resource.content.indexOf(firstWord) + 100) : resource.summary;
+        return { resource, score, keywordScore: score, semanticScore: 0, snippets: snippet ? [snippet] : [], matchType: inferResourceMatchType(resource), recommendation: buildResourceRecommendation(resource, mode) };
       })
-      .filter((item) => !query.trim() || item.score > 0)
+      .filter((item) => !effectiveQuery.trim() || item.score > 0)
       .sort((a, b) => b.score - a.score)
-  }, [filters, query, resources]);
+  }, [effectiveQuery, filters, mode, resources]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3118,7 +3464,7 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
     fetch("/api/resources/search", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query, filters }),
+      body: JSON.stringify({ query, context, filters, mode, resources }),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("后端全文检索不可用，已使用本地检索。");
@@ -3134,17 +3480,64 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
     return () => {
       cancelled = true;
     };
-  }, [filters, localResults, query]);
+  }, [context, filters, localResults, mode, query, resources]);
 
-  const results = searchResults.length || query.trim() || Object.values(filters).some(Boolean) ? searchResults : localResults;
+  const results = searchResults.length || effectiveQuery.trim() || Object.values(filters).some(Boolean) ? searchResults : localResults;
   const resourceTypes = Array.from(new Set(resources.map((resource) => resource.type).filter(Boolean)));
   const sensitiveLevels = Array.from(new Set(resources.map((resource) => resource.sensitive).filter(Boolean)));
+  const modeMeta = {
+    natural: {
+      title: "AI 自然语言检索",
+      placeholder: "口语化描述你想找什么，例如：找一个适合二次元新品上线、能证明预约转化效果的投标案例",
+      helper: "全域检索标题、摘要、正文、标签和解析片段，匹配资产、案例、话术、数据、素材和模板。",
+    },
+    recommend: {
+      title: "需求关联智能推荐",
+      placeholder: "粘贴当前项目需求、Brief 或方案段落，例如：女性向周年活动，需要社群玩法、KOL 扩散和舆情预案",
+      helper: "基于当前项目需求、方案内容和创作场景，推荐相关资产、案例、素材与模板。",
+    },
+    similar: {
+      title: "相似内容智能匹配",
+      placeholder: "粘贴当前创作内容、标题、玩法或传播创意，系统会匹配相似优秀案例和素材方向",
+      helper: "对照当前创作内容，寻找相似案例、爆款素材、话术结构和参考方向。",
+    },
+  } satisfies Record<ResourceSearchMode, { title: string; placeholder: string; helper: string }>;
+
+  const checkErp = async () => {
+    try {
+      const response = await fetch("/api/erp/resources");
+      const data = await response.json();
+      setErpMessage(data.message || "ERP 接口已预留。");
+    } catch {
+      setErpMessage("ERP 接口暂不可用，请确认本地后端服务。");
+    }
+  };
 
   return (
     <section className="page">
       <PageTitle title="资料库" subtitle="上传、解析、检索和复用策略资产。" action={<button className="primary-button" onClick={() => setPage("resourceUpload")}>上传资料</button>} />
-      <div className="search-panel">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入关键词，或描述你想找的资料，例如：找一个适合二次元手游新品上线的投标方案" />
+      <div className="smart-search-panel">
+        <div className="tabs">
+          <button className={`tab ${mode === "natural" ? "active" : ""}`} onClick={() => setMode("natural")}>自然语言检索</button>
+          <button className={`tab ${mode === "recommend" ? "active" : ""}`} onClick={() => setMode("recommend")}>需求推荐</button>
+          <button className={`tab ${mode === "similar" ? "active" : ""}`} onClick={() => setMode("similar")}>相似匹配</button>
+        </div>
+        <div className="smart-search-copy">
+          <strong>{modeMeta[mode].title}</strong>
+          <span>{modeMeta[mode].helper}</span>
+        </div>
+        {mode === "natural" ? (
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={modeMeta[mode].placeholder} />
+        ) : (
+          <textarea className="smart-search-textarea" value={context} onChange={(event) => setContext(event.target.value)} placeholder={modeMeta[mode].placeholder} />
+        )}
+        <div className="erp-connector">
+          <div>
+            <strong>ERP 资料库接口</strong>
+            <span>{erpMessage}</span>
+          </div>
+          <button className="ghost-button" onClick={checkErp}>检查接口</button>
+        </div>
       </div>
       <div className="filter-bar">
         <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}>
@@ -3160,18 +3553,19 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
           <option value="成功">解析成功</option>
           <option value="失败">解析失败</option>
         </select>
-        <span>结果：{results.length}</span>
+        <span>智能结果：{results.length}</span>
       </div>
       {searchMessage && <div className="note-box"><p>{searchMessage}</p></div>}
       <div className="resource-grid">
-        {results.map(({ resource, score, keywordScore = score, semanticScore = 0, snippets }) => (
+        {results.map(({ resource, score, keywordScore = score, semanticScore = 0, snippets, matchType, recommendation }) => (
           <div className="resource-card static-card" key={resource.id}>
             <div className="resource-type">{resource.type}</div>
             <h3>{resource.title}</h3>
             <p>{resource.summary}</p>
-            {query.trim() && <p className="match-reason">相关度：{score}，关键词：{keywordScore}，语义：{Math.round(semanticScore * 100)}</p>}
+            {effectiveQuery.trim() && <p className="match-reason">{matchType || "资产"} / 相关度：{score}，关键词：{keywordScore}，语义：{Math.round(semanticScore * 100)}</p>}
+            {recommendation && <p className="recommendation">{recommendation}</p>}
             {snippets.map((snippet, index) => <p className="snippet" key={`${resource.id}-${index}`}>{snippet}</p>)}
-            <div className="tag-row">{resource.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
+            <div className="tag-row">{(resource.tags || []).map((tag) => <span key={tag}>{tag}</span>)}</div>
             <div className="table-actions">
               <button className="link-button" onClick={() => openResource(resource.id)}>查看</button>
               <button className="link-button danger" onClick={() => deleteResource(resource.id)}>删除</button>
@@ -3181,6 +3575,23 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
       </div>
     </section>
   );
+}
+
+function inferResourceMatchType(resource: Resource) {
+  const text = `${resource.type} ${resource.title} ${(resource.tags || []).join(" ")} ${resource.summary} ${resource.content}`;
+  if (/案例|复盘|中标|爆款|优秀|标杆/.test(text)) return "案例";
+  if (/话术|文案|口播|脚本|标题|slogan/i.test(text)) return "话术";
+  if (/数据|报表|指标|预算|roi|cpm|转化|投放/i.test(text)) return "数据";
+  if (/模板|框架|结构|母版|ppt/i.test(text)) return "模板";
+  if (/素材|图片|视频|pv|kv|海报/i.test(text)) return "素材";
+  return "资产";
+}
+
+function buildResourceRecommendation(resource: Resource, mode: ResourceSearchMode) {
+  const matchType = inferResourceMatchType(resource);
+  if (mode === "recommend") return `可作为当前需求的${matchType}参考，优先复用其中的结构、表达或执行经验。`;
+  if (mode === "similar") return `与当前创作内容存在相似语义，可用于对标表达方式、素材方向和内容组织。`;
+  return `命中${matchType}线索，可继续查看正文片段确认适配度。`;
 }
 
 function ResourceUpload({ setResources, setPage, addJob }: { setResources: React.Dispatch<React.SetStateAction<Resource[]>>; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void }) {
@@ -3463,6 +3874,72 @@ function SpreadsheetPreview({ spreadsheet, title, summary }: { spreadsheet: Spre
   );
 }
 
+function SchemeAssistant({
+  activeTab,
+  setActiveTab,
+  briefOutput,
+  setBriefOutput,
+  projects,
+  resources,
+  setPage,
+  openOutline,
+  outlineOutput,
+  setOutlineOutput,
+  contentAuditOutput,
+  setContentAuditOutput,
+  outlineTab,
+  addJob,
+}: {
+  activeTab: AssistantTab;
+  setActiveTab: (tab: AssistantTab) => void;
+  briefOutput: string;
+  setBriefOutput: (value: string) => void;
+  projects: Project[];
+  resources: Resource[];
+  setPage: (page: Page) => void;
+  openOutline: (tab?: OutlineTab) => void;
+  outlineOutput: string;
+  setOutlineOutput: (value: string) => void;
+  contentAuditOutput: string;
+  setContentAuditOutput: (value: string) => void;
+  outlineTab: OutlineTab;
+  addJob: (type: string, name: string, source: string) => void;
+}) {
+  return (
+    <section className="page">
+      <PageTitle title="方案助手" subtitle="把客户 Brief 解析、PPT 模板生成和内容检查收拢到同一个方案工作流。" />
+      <div className="tabs assistant-tabs">
+        <button className={`tab ${activeTab === "brief" ? "active" : ""}`} onClick={() => setActiveTab("brief")}>Brief 解析</button>
+        <button className={`tab ${activeTab === "template" ? "active" : ""}`} onClick={() => setActiveTab("template")}>生成 PPT 模板</button>
+      </div>
+      {activeTab === "brief" ? (
+        <BriefAssistant
+          briefOutput={briefOutput}
+          setBriefOutput={setBriefOutput}
+          projects={projects}
+          resources={resources}
+          setPage={setPage}
+          openOutline={openOutline}
+          addJob={addJob}
+          embedded
+        />
+      ) : (
+        <OutlineAssistant
+          briefOutput={briefOutput}
+          resources={resources}
+          outlineOutput={outlineOutput}
+          setOutlineOutput={setOutlineOutput}
+          contentAuditOutput={contentAuditOutput}
+          setContentAuditOutput={setContentAuditOutput}
+          entryTab={outlineTab}
+          addJob={addJob}
+          embedded
+        />
+      )}
+    </section>
+  );
+}
+
 function BriefAssistant({
   briefOutput,
   setBriefOutput,
@@ -3471,6 +3948,7 @@ function BriefAssistant({
   setPage,
   openOutline,
   addJob,
+  embedded = false,
 }: {
   briefOutput: string;
   setBriefOutput: (value: string) => void;
@@ -3479,6 +3957,7 @@ function BriefAssistant({
   setPage: (page: Page) => void;
   openOutline: (tab?: OutlineTab) => void;
   addJob: (type: string, name: string, source: string) => void;
+  embedded?: boolean;
 }) {
   const [apiConfig, setApiConfig] = usePersistentState<BriefApiConfig>("strategy-center-brief-api-config", {
     endpoint: "",
@@ -3662,8 +4141,9 @@ ${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name,
   };
 
   return (
-    <section className="page">
-      <PageTitle title="Brief 解析" subtitle="上传或粘贴客户 Brief，生成需求解构和 QA 清单。" />
+    <section className={embedded ? "assistant-subpage" : "page"}>
+      {!embedded && <PageTitle title="Brief 解析" subtitle="上传或粘贴客户 Brief，生成需求解构和 QA 清单。" />}
+      {embedded && <div className="subpage-heading"><strong>Brief 解析</strong><span>上传或粘贴客户 Brief，生成需求解构和 QA 清单。</span></div>}
       <div className="split-panel">
         <Card title="输入信息">
           <div className="form-grid">
@@ -3786,6 +4266,7 @@ function OutlineAssistant({
   setContentAuditOutput,
   entryTab,
   addJob,
+  embedded = false,
 }: {
   briefOutput: string;
   resources: Resource[];
@@ -3795,6 +4276,7 @@ function OutlineAssistant({
   setContentAuditOutput: (value: string) => void;
   entryTab: OutlineTab;
   addJob: (type: string, name: string, source: string) => void;
+  embedded?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<"template" | "audit">("template");
   const [form, setForm] = useState({
@@ -3828,8 +4310,14 @@ function OutlineAssistant({
   };
 
   return (
-    <section className="page">
-      <PageTitle title="PPT 模板与内容检查" subtitle={activeTab === "template" ? "生成可编辑的 PPT 页面模板，并补齐布局、视觉和填充提示。" : "逐页/逐模块检查当前 PPT 内容，输出分类问题报告。"} />
+    <section className={embedded ? "assistant-subpage" : "page"}>
+      {!embedded && <PageTitle title="PPT 模板与内容检查" subtitle={activeTab === "template" ? "生成可编辑的 PPT 页面模板，并补齐布局、视觉和填充提示。" : "逐页/逐模块检查当前 PPT 内容，输出分类问题报告。"} />}
+      {embedded && (
+        <div className="subpage-heading">
+          <strong>{activeTab === "template" ? "生成 PPT 模板" : "内容检查报告"}</strong>
+          <span>{activeTab === "template" ? "生成可编辑的 PPT 页面模板，并补齐布局、视觉和填充提示。" : "逐页/逐模块检查当前 PPT 内容，输出分类问题报告。"}</span>
+        </div>
+      )}
       <div className="tabs">
         <button className={`tab ${activeTab === "template" ? "active" : ""}`} onClick={() => setActiveTab("template")}>PPT 模板生成</button>
         <button className={`tab ${activeTab === "audit" ? "active" : ""}`} onClick={() => setActiveTab("audit")}>内容检查报告</button>
@@ -5528,7 +6016,7 @@ function Card({ title, children, action }: { title: string; children: React.Reac
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: number; tone: string }) {
+function Metric({ label, value, tone }: { label: string; value: React.ReactNode; tone: string }) {
   return (
     <div className={`metric metric-${tone}`}>
       <span>{label}</span>
