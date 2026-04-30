@@ -1,0 +1,63 @@
+{
+  "strategy-center-brief-api-config": {
+    "endpoint": "",
+    "apiKey": "",
+    "model": ""
+  },
+  "strategy-center-members": [
+    {
+      "id": 1,
+      "name": "周齐",
+      "role": "主策划",
+      "status": "正常",
+      "monthlyCapacity": 8,
+      "avgDeliveryDays": 5,
+      "skills": [
+        "新品上线",
+        "投标",
+        "策略统筹"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "林岚",
+      "role": "调研策划",
+      "status": "正常",
+      "monthlyCapacity": 10,
+      "avgDeliveryDays": 3,
+      "skills": [
+        "用户洞察",
+        "竞品分析",
+        "女性向"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "陈舟",
+      "role": "执行策划",
+      "status": "加班",
+      "monthlyCapacity": 9,
+      "avgDeliveryDays": 4,
+      "skills": [
+        "方案大纲",
+        "二次元",
+        "活动推广"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "王西",
+      "role": "执行策划",
+      "status": "正常",
+      "monthlyCapacity": 7,
+      "avgDeliveryDays": 6,
+      "skills": [
+        "商务协同",
+        "PPT跟进",
+        "内部评审"
+      ]
+    }
+  ],
+  "strategy-center-outline-output": "",
+  "strategy-center-content-check-output": ""
+}
