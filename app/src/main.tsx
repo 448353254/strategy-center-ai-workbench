@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import {
+  importedJobsSeed,
+  importedMembersSeed,
+  importedProjectsSeed,
+  importedResourcesSeed,
+} from "./importedSeedData";
 
 type Page =
   | "home"
@@ -14,11 +20,25 @@ type Page =
   | "resourceDetail"
   | "brief"
   | "outline"
+  | "script"
   | "aiJobs"
   | "settings";
 
 type OutlineTab = "template" | "audit";
-type AssistantTab = "brief" | "template";
+type AssistantTab = "brief" | "outline" | "template";
+type PeopleDetailView = "members" | "active" | "overload" | "delayed";
+type BidQuickFilter = "finished" | "won" | "lost" | null;
+type UserRole = "admin" | "user";
+
+interface AuthUser {
+  name: string;
+  role: UserRole;
+}
+
+const demoUsers: Array<AuthUser & { account: string; password: string; title: string }> = [
+  { account: "admin", password: "admin123", name: "管理员", role: "admin", title: "策略中心管理员" },
+  { account: "user", password: "user123", name: "普通用户", role: "user", title: "项目执行用户" },
+];
 
 type Risk = "正常" | "一般" | "紧急" | "严重";
 type TaskStatus = "未开始" | "进行中" | "已完成" | "延期" | "暂停";
@@ -135,6 +155,13 @@ interface BriefApiConfig {
   model: string;
 }
 
+const globalAiConfigKey = "strategy-center-global-ai-config";
+const defaultAiConfig: BriefApiConfig = {
+  endpoint: "",
+  apiKey: "",
+  model: "",
+};
+
 interface BriefInputFile {
   id: number;
   name: string;
@@ -224,7 +251,151 @@ interface ParsedAuditSection {
   searchable: string;
 }
 
-type ResearchTab = "user" | "competitor" | "hotspot" | "sentiment" | "archive";
+type ResearchTab = "brief" | "fixed" | "variable" | "report";
+
+type FlowStepStatus = "已完成" | "缺资料" | "可继续生成";
+
+interface FlowStep {
+  key: ResearchTab;
+  title: string;
+  status: FlowStepStatus;
+  detail: string;
+  transfer: string;
+}
+
+interface StandardResearchModule {
+  title: string;
+  goal: string;
+  output: string;
+  checklist: string[];
+}
+
+interface VariableResearchScenario {
+  scene: string;
+  modules: string[];
+  questions: string[];
+  output: string;
+}
+
+const fixedResearchModules: StandardResearchModule[] = [
+  {
+    title: "用户深度调查",
+    goal: "统一目标用户、内容偏好和触达渠道判断。",
+    output: "用户分层表 + 内容偏好判断 + 渠道触点建议",
+    checklist: [
+      "用户分层与画像：核心硬核、休闲活跃、轻度回流、新用户；年龄、性别、职业、设备偏好、游戏场景。",
+      "玩家游戏动机：竞争、成就、沉浸、逃避、社交、创作。",
+      "游戏外高频讨论话题：角色、剧情、平衡性、活动、BUG。",
+      "客户过往投放类型：攻略向、整活向、剧情向、测评向。",
+      "玩家喜欢看的内容：搞笑、攻略、二创、赛事、测评。",
+      "传播触点与信息渠道：抖音、B站、小红书、TapTap、贴吧、社群。",
+    ],
+  },
+  {
+    title: "游戏黑话与文化手册",
+    goal: "避免外行表达，识别社群梗、身份标签和雷区。",
+    output: "黑话词典 + 梗/表情包清单 + 禁忌表达表",
+    checklist: [
+      "社群自创缩略词，例如 yy、py、jjc、ssr 等。",
+      "内部梗与表情包：官方有意或无意形成的梗。",
+      "玩家身份认同标签：称谓、IP 符号、台词、场景的情感意义。",
+      "禁忌词与敏感话题：平衡性、数值膨胀、运营节奏、容易引战表达。",
+    ],
+  },
+  {
+    title: "游戏产品自身调研",
+    goal: "明确产品本身能被传播的主题感、卖点和品宣态度。",
+    output: "产品传播定位 + 卖点优先级 + 节点品宣口径",
+    checklist: [
+      "当前版本或游戏本身已有主题感：废土、希望、轻松、治愈、热血等。",
+      "核心卖点：玩法、美术、剧情、社交、IP 优势。",
+      "各大节点品宣态度：预热、爆发、延续、复盘阶段分别怎么说。",
+    ],
+  },
+  {
+    title: "竞品与行业动态分析",
+    goal: "判断同赛道近期打法、风险案例和可借鉴形式。",
+    output: "竞品动作表 + 翻车案例库 + 行业玩法参考",
+    checklist: [
+      "同赛道近 3 个月新品及营销动作：头部和新入局者都要看。",
+      "竞品翻车案例与玩家高频吐槽：活动、文案、定价、达人合作、运营节奏。",
+      "同赛道热门营销形式：直播整活、UGC 挑战赛、线下快闪等。",
+      "政策合规要求：未成年人保护、广告标注规范、平台内容规则。",
+    ],
+  },
+];
+
+const variableResearchScenarios: VariableResearchScenario[] = [
+  {
+    scene: "异业品牌联动",
+    modules: ["联动对象用户画像匹配度", "联动偏好与形式接受度", "联动风险雷点排查"],
+    questions: [
+      "双方用户重合度有多高？",
+      "用户最反感什么联动形式，例如扫码领礼包、换皮肤、割韭菜式联动？",
+      "玩家对品牌的认知与偏好是什么，是否有联名期待？",
+      "品牌近期有无舆情风险，以及品牌方有哪些合规要求？",
+    ],
+    output: "联动适配度判断 + 形式建议 + 风险排查表",
+  },
+  {
+    scene: "推出贵价皮肤 / 稀有道具",
+    modules: ["付费动机与定价敏感度", "皮肤功能/外观偏好", "过往社群态度", "炫耀动机强度"],
+    questions: [
+      "目标付费人群的接受区间、心理预期和付费决策因素是什么？",
+      "外观、特效、限定、收藏价值、专属语音/动作里，哪个最适合种草？",
+      "过往玩家好评、差评、争议点是什么？",
+      "用户是否会受稀缺感、身份展示、从众心理影响而购买？",
+    ],
+    output: "定价风险判断 + 种草卖点 + 反感点规避清单",
+  },
+  {
+    scene: "版本大更新 / 新角色上线",
+    modules: ["核心信息拆解", "新内容预期管理", "老玩家回归阻力", "历史传播素材适配"],
+    questions: [
+      "版本或角色核心抓手是什么？",
+      "用户对当前版本最不满意的点，新版本是否解决？",
+      "流失用户回来的最低门槛是什么，例如送十连、签到福利、新角色试用？",
+      "过去表现最好的预告形式是什么，实机演示、KOL 试玩还是剧情 PV？",
+      "需规避哪些敏感点，例如平衡性调整、肝度争议？",
+    ],
+    output: "版本传播主线 + 回流门槛判断 + 素材适配建议",
+  },
+  {
+    scene: "破圈事件 / 线下展会活动",
+    modules: ["城市选择依据", "破圈目标人群调研", "线下互动意愿", "天气/人流/竞品活动"],
+    questions: [
+      "线下活动为什么选这个城市或商圈？",
+      "非核心玩家、路人用户的 IP 认知度和兴趣点是什么？",
+      "用户愿意排队多久，愿意做什么任务，例如集章、cosplay 合影？",
+      "同时段是否有其他游戏或二次元活动分流？",
+    ],
+    output: "城市/点位依据 + 互动机制建议 + 分流风险判断",
+  },
+  {
+    scene: "IP 衍生与 UGC 内容活动",
+    modules: ["用户创作能力评估", "奖励吸引力", "素材开放程度", "衍生内容适配性", "传播形式参考"],
+    questions: [
+      "玩家二创兴趣浓度是否足够？",
+      "什么奖励能驱动普通用户参与？",
+      "官方能开放哪些素材包？",
+      "适合破圈的 IP 亮点是什么，角色人设、剧情片段还是世界观设定？",
+      "同 IP 或同赛道有哪些成功破圈案例？",
+    ],
+    output: "UGC 活动门槛 + 奖励设计 + 素材开放清单",
+  },
+  {
+    scene: "大型营销事件",
+    modules: ["事件主题与品牌/赛季契合度", "事件形式与内容结构", "舆情风险"],
+    questions: [
+      "营销事件的核心看点是什么？",
+      "用户主动参与或传播该事件的驱动因素是什么？",
+      "事件在线上还是线下，内容结构如何排布？",
+      "历史大型活动中哪些环节口碑最好，哪些环节被吐槽？",
+      "是否存在选手、达人、品牌或内容尺度相关舆情风险？",
+    ],
+    output: "事件核心看点 + 内容结构 + 风险预案",
+  },
+];
 
 interface UserInsightProfile {
   id: number;
@@ -319,142 +490,8 @@ interface MarketingResearchReport {
   finalDirection: string[];
 }
 
-const initialTasks: ProjectTask[] = [
-  {
-    id: 1,
-    phase: "前置调研",
-    name: "用户与竞品资料整理",
-    owner: "林岚",
-    ownerId: 2,
-    department: "策略",
-    start: "04-29",
-    end: "05-02",
-    dependency: "-",
-    status: "进行中",
-    progress: 65,
-    risk: "正常",
-  },
-  {
-    id: 2,
-    phase: "策略方案",
-    name: "核心策略与创意主题",
-    owner: "陈舟",
-    ownerId: 3,
-    department: "策略",
-    start: "05-03",
-    end: "05-06",
-    dependency: "用户与竞品资料整理",
-    status: "未开始",
-    progress: 0,
-    risk: "一般",
-  },
-  {
-    id: 3,
-    phase: "内部评审",
-    name: "方案初稿评审",
-    owner: "王西",
-    ownerId: 4,
-    department: "商务",
-    start: "05-07",
-    end: "05-07",
-    dependency: "核心策略与创意主题",
-    status: "延期",
-    progress: 20,
-    delayReason: "客户补充需求未确认",
-    risk: "紧急",
-  },
-];
-
-const projectsSeed: Project[] = [
-  {
-    id: 101,
-    name: "星河边境新品上线投标",
-    game: "星河边境",
-    client: "某头部游戏厂商",
-    type: "新品上线",
-    owner: "周齐",
-    ownerId: 1,
-    stage: "方案制作",
-    start: "2026-04-29",
-    submit: "2026-05-08",
-    pitch: "2026-05-10",
-    status: "进行中",
-    risk: "紧急",
-    gameType: "二次元",
-    clientType: "大厂",
-    bidDate: "2026-04-29",
-    bidAmount: 180,
-    clientCoreNeeds: "重视数据支撑、渠道资源和执行确定性。",
-    bidResult: "未中标",
-    lostReasonCategory: "方案打磨",
-    lostReasonDetail: "内部评审延期，客户补充需求确认不充分。",
-    tasks: initialTasks,
-    resourceIds: [1, 3],
-  },
-  {
-    id: 102,
-    name: "花间旅人周年活动方案",
-    game: "花间旅人",
-    client: "某女性向游戏团队",
-    type: "活动推广",
-    owner: "林岚",
-    ownerId: 2,
-    stage: "调研洞察",
-    start: "2026-04-25",
-    submit: "2026-05-05",
-    pitch: "2026-05-06",
-    status: "进行中",
-    risk: "一般",
-    gameType: "女性向",
-    clientType: "中小厂商",
-    bidDate: "2026-04-25",
-    bidAmount: 80,
-    clientCoreNeeds: "看重创意玩法、社群情绪和玩家口碑风险控制。",
-    bidResult: "中标",
-    winningFactors: "用户洞察准确，创意与周年节点结合紧密，风险预案完整。",
-    tasks: initialTasks.slice(0, 2),
-    resourceIds: [2],
-  },
-];
-
-const resourcesSeed: Resource[] = [
-  {
-    id: 1,
-    title: "二次元手游新品上线投标方案",
-    type: "方案",
-    summary: "围绕世界观、角色人设、预约转化和核心玩家扩散设计的新品上线方案。",
-    content: "二次元手游新品上线投标方案，重点包括世界观预热、角色 PV、预约转化、核心玩家扩散、社区话题运营、KOL 首发测评、渠道资源整合。",
-    tags: ["二次元", "新品上线", "投标", "高复用"],
-    uploader: "陈舟",
-    uploadedAt: "2026-04-20",
-    visibility: "策略部门",
-    sensitive: "内部",
-  },
-  {
-    id: 2,
-    title: "春节活动整合营销文案库",
-    type: "文案",
-    summary: "包含节日节点、社交传播、短视频口播、社区互动等多类型文案模板。",
-    content: "春节活动整合营销文案库，覆盖红包福利、登录奖励、节日剧情、短视频口播、社区互动、玩家召回、休闲游戏节日氛围包装。",
-    tags: ["春节", "活动推广", "文案", "休闲"],
-    uploader: "林岚",
-    uploadedAt: "2026-04-18",
-    visibility: "项目成员",
-    sensitive: "普通",
-  },
-  {
-    id: 3,
-    title: "女性向游戏舆情风险复盘",
-    type: "复盘",
-    summary: "整理女性向游戏在角色设定、福利节奏、商业化表达中的高频舆情风险。",
-    content: "女性向游戏舆情风险复盘，包含角色人设争议、福利节奏、商业化强度、文案尺度、KOL 发言风险、玩家社群情绪管理。",
-    tags: ["女性向", "舆情风险", "复盘", "避坑"],
-    uploader: "王西",
-    uploadedAt: "2026-04-12",
-    visibility: "策略部门",
-    sensitive: "保密",
-  },
-];
+const projectsSeed = importedProjectsSeed as Project[];
+const resourcesSeed = importedResourcesSeed as Resource[];
 
 function usePersistentState<T>(key: string, initialValue: T) {
   const [value, setValue] = useState<T>(() => {
@@ -499,6 +536,44 @@ function usePersistentState<T>(key: string, initialValue: T) {
   }, [backendAvailable, backendReady, key, value]);
 
   return [value, setValue] as const;
+}
+
+function readStoredAiConfig(key: string): BriefApiConfig | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BriefApiConfig>;
+    if (!parsed.endpoint && !parsed.apiKey && !parsed.model) return null;
+    return {
+      endpoint: parsed.endpoint ?? "",
+      apiKey: parsed.apiKey ?? "",
+      model: parsed.model ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function useGlobalAiConfig() {
+  return usePersistentState<BriefApiConfig>(globalAiConfigKey, defaultAiConfig);
+}
+
+function useMigratedGlobalAiConfig() {
+  const [apiConfig, setApiConfig] = useGlobalAiConfig();
+
+  useEffect(() => {
+    if (apiConfig.endpoint || apiConfig.apiKey || apiConfig.model) return;
+    const legacyKeys = [
+      "strategy-center-brief-api-config",
+      "strategy-center-marketing-brief-api-config",
+      "strategy-center-script-api-config",
+      "strategy-center-marketing-research-api-config",
+    ];
+    const legacyConfig = legacyKeys.map(readStoredAiConfig).find((config): config is BriefApiConfig => Boolean(config));
+    if (legacyConfig) setApiConfig(legacyConfig);
+  }, [apiConfig.apiKey, apiConfig.endpoint, apiConfig.model, setApiConfig]);
+
+  return [apiConfig, setApiConfig] as const;
 }
 
 function today() {
@@ -550,10 +625,21 @@ function inferTags(text: string) {
   return Array.from(new Set(matched.length ? matched : ["待分类"]));
 }
 
-function summarize(text: string) {
+function summarize(text: string, maxLength = 92) {
   const compact = text.replace(/\s+/g, " ").trim();
   if (!compact) return "暂无内容摘要，请补充资料正文或备注。";
-  return compact.length > 92 ? `${compact.slice(0, 92)}...` : compact;
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+}
+
+function includesQuery(values: Array<string | number | undefined | null | string[]>, query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return values
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .filter((value): value is string | number => value !== undefined && value !== null)
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery);
 }
 
 function parseCsvLine(line: string) {
@@ -721,6 +807,375 @@ ${form.brief || "暂无"}
 
 上传文件解析内容：
 ${fileSections.length ? fileSections.join("\n\n") : "暂无上传文件"}`;
+}
+
+function buildMarketingBriefInputPackage(form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }, files: BriefInputFile[]) {
+  const fileSections = files.map((file, index) => `## ${index + 1}. ${classifyBriefFile(file.name, file.content)}：${file.name}
+解析状态：${file.parseStatus}${file.parseError ? `（${file.parseError}）` : ""}
+摘要：${file.summary}
+正文：
+${file.content || "暂无可解析正文"}`);
+  return `本次营销调研 Brief 输入包：
+项目名称：${form.projectName || "未命名项目"}
+游戏名称：${form.gameName || "未填写"}
+项目类型：${form.projectType || "未填写"}
+营销目标/场景：${form.marketingGoal || "未填写"}
+禁忌/限制：${form.forbidden || "暂无"}
+
+手动补充 Brief / 沟通记录：
+${form.brief || "暂无"}
+
+上传文件解析内容：
+${fileSections.length ? fileSections.join("\n\n") : "暂无上传文件"}`;
+}
+
+function resourceToInputFile(resource: Resource): BriefInputFile {
+  return {
+    id: resource.id,
+    name: resource.title || resource.fileName || "资料库文件",
+    fileSize: resource.fileSize,
+    mimeType: resource.mimeType,
+    parseStatus: resource.parseStatus === "失败" ? "失败" : "成功",
+    parseError: resource.parseError,
+    summary: resource.summary || summarize(resource.content || ""),
+    content: resource.content || resource.summary || "",
+    structuredContent: resource.structuredContent,
+  };
+}
+
+function buildResourceContext(resources: Resource[]) {
+  if (!resources.length) return "未选择资料库文件。";
+  return resources.map((resource, index) => `## 资料库引用 ${index + 1}：${resource.title}
+类型：${resource.type || "未分类"}
+标签：${resource.tags?.join(" / ") || "无"}
+摘要：${resource.summary || "无"}
+正文摘录：
+${summarize(resource.content || resource.summary || "", 1200)}`).join("\n\n");
+}
+
+function scoreResource(resource: Resource, context: string) {
+  const source = `${resource.title} ${resource.type} ${resource.summary} ${resource.content} ${(resource.tags || []).join(" ")}`.toLowerCase();
+  const keywords = Array.from(new Set(context.toLowerCase().match(/[\u4e00-\u9fa5a-z0-9]{2,}/g) || []));
+  const keywordScore = keywords.slice(0, 80).reduce((score, keyword) => score + (source.includes(keyword) ? 1 : 0), 0);
+  const typeBoost = /方案|竞品|复盘|brief|qa|调研|案例/i.test(resource.type) ? 3 : 0;
+  const tagBoost = (resource.tags || []).some((tag) => context.includes(tag)) ? 2 : 0;
+  return keywordScore + typeBoost + tagBoost;
+}
+
+function missingMarketingInputs(form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }, hasBriefBreakdown: boolean, fixedDoneCount: number, selectedVariableCount: number, linkedResourceCount: number) {
+  const missing = [
+    !form.projectName.trim() && "项目名称",
+    !form.gameName.trim() && "游戏名称",
+    !form.marketingGoal.trim() && "营销目标 / 场景",
+    !form.forbidden.trim() && "预算、时间、素材或品牌红线",
+    !form.brief.trim() && !hasBriefBreakdown && "客户 Brief 正文或沟通记录",
+    linkedResourceCount === 0 && "历史方案 / 竞品资料 / 复盘报告",
+    fixedDoneCount === 0 && "至少 1 个固定模块分析",
+    selectedVariableCount === 0 && "按客户需求选择可变模块",
+  ].filter(Boolean) as string[];
+  return missing.slice(0, 8);
+}
+
+function downloadMarkdown(filename: string, title: string, content: string) {
+  downloadText(filename, `# ${title}\n\n${content || "暂无内容"}`, "text/markdown;charset=utf-8");
+}
+
+function buildMarketingBriefPrompt(inputPackage: string) {
+  return `你是资深游戏营销前期调研负责人。请以专业策划人员身份拆解本次 Brief，用于后续“跑固定模块、选可变模块、形成输出”的调研工作台。
+
+你必须输出以下结构：
+一、Brief 一句话判断
+- 用一句话说明这次客户真正想解决什么问题。
+
+二、需求拆解表
+- 核心需求：列出 1-3 条，例如提升游戏转化、强化品牌认知、促进老玩家回流。每条标注优先级 P0/P1/P2、依据、对调研的影响。
+- 次要需求：列出 1-3 条，例如优化用户口碑、拓展年轻用户、提升社群讨论。
+- 隐性需求：列出 1-3 条，例如客户希望方案有创新性、可落地性强、能规避舆情、能讲清 ROI。
+
+三、约束条件
+- 预算限制
+- 时间限制
+- 资源限制
+- 合规/品牌/舆情限制
+- 不确定或需客户确认的信息
+
+四、调研优先级建议
+- 固定模块中哪些必须重点跑，哪些可用已有资料覆盖。
+- 可变模块建议选择哪一个或哪几个场景，原因是什么。
+- 哪些信息会影响后续策略判断，必须优先补齐。
+
+五、下一步执行清单
+- 按“先做什么、用什么资料、输出什么判断”的方式列 5-8 条。
+
+规则：
+1. 不要编造客户没有说过的事实；可以标注“基于输入推断”。
+2. 必须区分明确需求、推断需求、待确认事项。
+3. 输出要短、准、可执行，避免空泛营销术语。
+4. 如 Brief 信息不足，要明确告诉用户还缺什么。
+
+${inputPackage}`;
+}
+
+function buildLocalMarketingBriefBreakdown(form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }, files: BriefInputFile[]) {
+  const combined = `${form.projectName} ${form.gameName} ${form.projectType} ${form.marketingGoal} ${form.forbidden} ${form.brief} ${files.map((file) => `${file.name} ${file.summary} ${file.content}`).join("\n")}`;
+  const hasConversion = /转化|拉新|新增|预约|下载|注册|回流|付费|购买|留存/.test(combined);
+  const hasBrand = /品牌|认知|声量|曝光|破圈|出圈|影响力/.test(combined);
+  const hasReputation = /口碑|舆情|评价|负面|社区|玩家情绪|吐槽/.test(combined);
+  const hasYoung = /年轻|Z世代|学生|小红书|抖音|B站|二创|UGC/.test(combined);
+  const hasBudget = /预算|费用|成本|报价|金额|ROI|投放/.test(combined);
+  const hasTime = /时间|节点|周期|上线|发布|截止|提案|讲标|预热/.test(combined);
+  const scenario =
+    variableResearchScenarios.find((item) => /联动|品牌/.test(combined) && item.scene.includes("联动")) ??
+    variableResearchScenarios.find((item) => /皮肤|道具|付费|定价/.test(combined) && item.scene.includes("皮肤")) ??
+    variableResearchScenarios.find((item) => /版本|角色|更新|回流/.test(combined) && item.scene.includes("版本")) ??
+    variableResearchScenarios.find((item) => /线下|展会|城市|快闪|破圈/.test(combined) && item.scene.includes("破圈")) ??
+    variableResearchScenarios.find((item) => /UGC|二创|攻略|表情包|创作/.test(combined) && item.scene.includes("UGC")) ??
+    variableResearchScenarios[0];
+  const coreNeeds = [
+    hasConversion ? "提升游戏转化或关键节点转化效率" : "",
+    hasBrand ? "强化品牌认知与项目声量" : "",
+    /回流|老玩家|留存/.test(combined) ? "促进老玩家回流与留存" : "",
+  ].filter(Boolean);
+  const secondaryNeeds = [
+    hasReputation ? "优化用户口碑与社区讨论氛围" : "",
+    hasYoung ? "拓展年轻用户或内容平台触点" : "",
+    "提升内容传播效率，形成可复用素材方向",
+  ].filter(Boolean);
+
+  return `一、Brief 一句话判断
+- ${form.projectName || form.gameName || "本次项目"}需要围绕“${form.marketingGoal || summarize(combined)}”完成前期调研，先确认用户、产品、文化和竞品底盘，再按“${scenario.scene}”增补场景调研。
+
+二、需求拆解表
+核心需求：
+${(coreNeeds.length ? coreNeeds : ["明确本次营销项目的主目标与转化路径"]).map((item, index) => `- P${index}｜${item}｜依据：${hasConversion || hasBrand ? "Brief/补充信息中出现相关目标词" : "当前输入较少，基于项目类型推断"}｜调研影响：优先决定用户分层、卖点排序和渠道选择。`).join("\n")}
+
+次要需求：
+${secondaryNeeds.slice(0, 3).map((item, index) => `- P${index + 1}｜${item}｜依据：${hasReputation || hasYoung ? "输入中出现口碑/年轻用户/内容平台相关信号" : "营销项目常规配套需求"}。`).join("\n")}
+
+隐性需求：
+- P1｜方案要有创新性，不能只是常规投放堆砌｜依据：营销提案通常需要可讲的新抓手｜调研影响：需要补充黑话文化、热点形式、竞品翻车与成功案例。
+- P1｜方案要可落地，能解释资源、时间和风险｜依据：客户通常会追问执行可行性｜调研影响：必须标注预算、节点、素材、渠道和合规约束。
+- P2｜需要降低舆情和玩家反感风险｜依据：游戏营销容易受社区情绪影响｜调研影响：必须跑禁忌词、敏感话题和竞品翻车案例。
+
+三、约束条件
+- 预算限制：${hasBudget ? "Brief 中出现预算/成本/ROI 线索，需进一步拆具体金额和投放口径。" : "未明确，需客户确认预算区间和报价口径。"}
+- 时间限制：${hasTime ? "Brief 中出现节点/上线/提案等时间线索，需整理关键截止日期。" : "未明确，需客户确认提案、预热、上线和复盘节点。"}
+- 资源限制：需确认可用素材、IP 授权、达人/KOL、渠道资源、线下资源。
+- 合规/品牌/舆情限制：${form.forbidden || "需确认禁忌表达、广告标注、未成年人保护、品牌调性和社群敏感点。"}
+- 待确认信息：核心 KPI、预算、素材授权、审核流程、竞品范围、交付物格式。
+
+四、调研优先级建议
+- 固定模块重点：用户深度调查、游戏黑话与文化手册、产品自身调研必须先跑；竞品与行业动态用于校准打法风险。
+- 可变模块建议：优先选择“${scenario.scene}”，原因是它最接近当前输入中的营销场景或需求表达。
+- 优先补齐：目标用户证据、转化/KPI 口径、预算与时间节点、禁忌表达、可用素材和渠道资源。
+
+五、下一步执行清单
+1. 整理 Brief 中的明确目标、KPI、时间节点和交付物。
+2. 按用户深度调查模板补用户分层、动机、内容偏好和渠道触点。
+3. 建黑话与文化手册，先标出玩家称谓、梗、禁忌词和敏感话题。
+4. 拆产品卖点和当前版本主题感，形成可传播卖点优先级。
+5. 拉近 3 个月同赛道新品、竞品动作和翻车案例。
+6. 按“${scenario.scene}”补充可变模块问题：${scenario.questions.slice(0, 2).join("；")}。
+7. 把缺失信息整理成客户确认 QA，优先问预算、节点、授权、合规和 KPI。`;
+}
+
+function buildFixedModuleAnalysisPrompt(module: StandardResearchModule, briefContext: string, form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }) {
+  return `你是资深游戏营销前期调研专家。请基于上一步 Brief 拆解结果，对固定模块“${module.title}”进行深度分析。
+
+项目基础信息：
+项目名称：${form.projectName || "未填写"}
+游戏名称：${form.gameName || "未填写"}
+项目类型：${form.projectType || "未填写"}
+营销目标/场景：${form.marketingGoal || "未填写"}
+约束/禁忌：${form.forbidden || "暂无"}
+
+上一步 Brief 拆解结果：
+${briefContext || "暂无 Brief 拆解结果，请基于项目基础信息和手动 Brief 谨慎推断，并标注需补充数据。"}
+
+当前模块标准要求：
+模块目标：${module.goal}
+标准输出：${module.output}
+必分析问题：
+${module.checklist.map((item) => `- ${item}`).join("\n")}
+
+输出要求：
+1. 不要复述框架说明，要直接生成“本次项目”的分析结论。
+2. 对每个结论标明依据类型：Brief 明确 / 基于输入推断 / 需补充数据。
+3. 结论必须服务本次营销需求，说明对内容、渠道、素材、风险或执行的影响。
+4. 输出要可操作，避免泛泛描述。
+
+请按以下结构输出：
+一、模块核心结论
+- 3-5 条最重要判断
+
+二、逐项深度分析
+- 严格覆盖当前模块的必分析问题
+- 每项包含：结论 / 依据 / 对营销动作的影响 / 需补充数据
+
+三、可直接进入方案的内容
+- 可写进 PPT 的洞察句
+- 可做成素材或活动的方向
+- 需要规避的表达或动作
+
+四、下一步补数清单
+- 列出本模块继续推进前必须补齐的信息`;
+}
+
+function buildLocalFixedModuleAnalysis(module: StandardResearchModule, briefContext: string, form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }) {
+  const context = `${briefContext} ${form.projectName} ${form.gameName} ${form.projectType} ${form.marketingGoal} ${form.forbidden} ${form.brief}`;
+  const scenario =
+    variableResearchScenarios.find((item) => /联动|品牌/.test(context) && item.scene.includes("联动")) ??
+    variableResearchScenarios.find((item) => /皮肤|道具|付费|定价/.test(context) && item.scene.includes("皮肤")) ??
+    variableResearchScenarios.find((item) => /版本|角色|更新|回流/.test(context) && item.scene.includes("版本")) ??
+    variableResearchScenarios.find((item) => /线下|展会|城市|快闪|破圈/.test(context) && item.scene.includes("破圈")) ??
+    variableResearchScenarios.find((item) => /UGC|二创|攻略|表情包|创作/.test(context) && item.scene.includes("UGC")) ??
+    variableResearchScenarios[0];
+  const project = form.projectName || form.gameName || "本次项目";
+  const moduleAdvice: Record<string, string[]> = {
+    用户深度调查: [
+      "优先把用户分成核心硬核、休闲活跃、轻度回流、新用户四类，分别判断转化阻力和内容钩子。",
+      "如果目标包含拉新或转化，新用户和轻度回流用户的门槛、福利敏感度、内容平台偏好要优先补齐。",
+      "传播触点建议先围绕抖音/B站/小红书/TapTap/社群做证据归集，不能只按经验选择渠道。",
+    ],
+    游戏黑话与文化手册: [
+      "本模块重点不是罗列黑话，而是判断哪些表达能显得懂玩家，哪些表达会触发反感。",
+      "需要优先收集玩家自称、常用缩略词、角色梗、剧情梗和官方曾经引发讨论的表达。",
+      "如果涉及品牌联动、破圈或年轻用户拓展，外部表达要先过一遍社群语境，避免外行感。",
+    ],
+    游戏产品自身调研: [
+      "先提炼当前版本主题感，再给核心卖点排序，避免把玩法、美术、剧情、社交、IP 优势平均用力。",
+      "品宣态度需要按节点拆：预热负责建立期待，爆发负责强化理由，延续负责承接讨论和转化。",
+      "所有卖点都要对应到用户动机，否则容易变成产品功能清单。",
+    ],
+    竞品与行业动态分析: [
+      "近 3 个月竞品动作要同时看头部和新入局者，避免只复刻大厂打法。",
+      "竞品翻车案例比成功案例更重要，能直接反推本次文案、活动机制和达人合作的雷区。",
+      "政策合规需要提前进入调研结论，尤其是未成年人保护、广告标注、抽奖和付费表达。",
+    ],
+  };
+  const advice = moduleAdvice[module.title] ?? module.checklist.slice(0, 3);
+  return `一、模块核心结论
+${advice.map((item) => `- ${item}｜依据：基于 Brief 拆解和“${scenario.scene}”场景推断。`).join("\n")}
+
+二、逐项深度分析
+${module.checklist.map((item, index) => `- ${item}
+  结论：需要围绕“${project}”和“${form.marketingGoal || scenario.scene}”补充本项证据，判断它如何影响用户、内容或渠道选择。
+  依据：${briefContext ? "Brief 拆解已提供项目需求上下文" : "当前 Brief 拆解不足，先按项目基础信息推断"}。
+  对营销动作的影响：用于决定素材方向、平台选择、风险规避或执行优先级。
+  需补充数据：评论样本、社区讨论、竞品案例、投放表现或客户确认信息。`).join("\n\n")}
+
+三、可直接进入方案的内容
+- 洞察句：${project} 的前期调研需要先把“用户为什么会被打动”和“什么表达会被反感”讲清楚。
+- 素材/活动方向：围绕“${form.marketingGoal || scenario.scene}”制作 2-3 个内容钩子，并用用户反馈验证。
+- 规避项：不要在没有证据时强行套用泛游戏用户画像，也不要忽略预算、节点、合规和社群敏感点。
+
+四、下一步补数清单
+- 补充玩家评论、社群讨论和平台热门内容样本。
+- 补充客户过往投放类型、效果和禁忌表达。
+- 补充同赛道近 3 个月竞品动作和翻车案例。
+- 补充可用素材、上线节点、预算区间和审核限制。`;
+}
+
+function inferBriefFieldFromText(text: string, field: "projectName" | "gameName" | "projectType" | "marketingGoal") {
+  const labelMap: Record<typeof field, string[]> = {
+    projectName: ["项目名称", "项目", "活动名称", "方案名称"],
+    gameName: ["游戏名称", "游戏", "产品名称", "产品"],
+    projectType: ["项目类型", "营销类型", "项目场景", "类型"],
+    marketingGoal: ["营销目标", "核心目标", "项目目标", "目标", "需求"],
+  };
+  for (const label of labelMap[field]) {
+    const matched = text.match(new RegExp(`${label}[:：]\\s*([^\\n。；;]+)`));
+    if (matched?.[1]) return matched[1].trim().slice(0, 80);
+  }
+  if (field === "projectType") {
+    if (/联动|异业|品牌合作/.test(text)) return "异业品牌联动";
+    if (/版本|更新|角色|回流/.test(text)) return "版本大更新 / 新角色上线";
+    if (/皮肤|道具|付费|定价/.test(text)) return "贵价皮肤 / 稀有道具";
+    if (/线下|展会|快闪|破圈/.test(text)) return "破圈事件 / 线下活动";
+    if (/UGC|二创|攻略|表情包|创作/.test(text)) return "IP 衍生与 UGC 内容活动";
+    if (/赛事|周年庆|发布会|直播盛典/.test(text)) return "大型营销事件";
+  }
+  if (field === "marketingGoal") {
+    const goals = [
+      /转化|拉新|预约|注册|下载/.test(text) ? "提升游戏转化" : "",
+      /品牌|声量|曝光|认知/.test(text) ? "强化品牌认知" : "",
+      /回流|留存|老玩家/.test(text) ? "促进老玩家回流" : "",
+      /口碑|舆情|社区/.test(text) ? "优化用户口碑" : "",
+    ].filter(Boolean);
+    if (goals.length) return goals.join(" / ");
+  }
+  return "";
+}
+
+function buildVariableModuleAnalysisPrompt(scenarios: VariableResearchScenario[], briefContext: string, fixedOutputs: Record<string, string>, form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }) {
+  return `你是资深游戏营销调研专家。请基于 Brief 拆解结果和固定模块分析，对客户选择的可变增补模块进行深度分析。
+
+项目基础信息：
+项目名称：${form.projectName || "未识别"}
+游戏名称：${form.gameName || "未识别"}
+项目类型：${form.projectType || "未识别"}
+营销目标：${form.marketingGoal || "未识别"}
+约束/禁忌：${form.forbidden || "暂无"}
+
+Brief 拆解结果：
+${briefContext || "暂无"}
+
+固定模块已有分析：
+${Object.entries(fixedOutputs).map(([name, output]) => `【${name}】\n${summarize(output)}`).join("\n\n") || "暂无固定模块分析。"}
+
+客户选择的可变模块：
+${scenarios.map((scenario) => `【${scenario.scene}】
+增补模块：${scenario.modules.join(" / ")}
+关键问题：
+${scenario.questions.map((item) => `- ${item}`).join("\n")}
+标准输出：${scenario.output}`).join("\n\n")}
+
+输出要求：
+1. 只分析客户选择的可变模块，不要把全部场景都堆进去。
+2. 每个场景必须结合本次 Brief 需求和前面固定模块结论。
+3. 输出“适配判断、关键证据、建议打法、风险雷点、待补资料、可进入方案的结论”。
+4. 不要编造事实；没有证据就标注需补充数据。`;
+}
+
+function buildFinalMarketingResearchReportPrompt({
+  briefContext,
+  fixedOutputs,
+  variableOutputs,
+  form,
+}: {
+  briefContext: string;
+  fixedOutputs: Record<string, string>;
+  variableOutputs: Record<string, string>;
+  form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string };
+}) {
+  return `你是资深游戏营销调研负责人。请把前面所有模块结果整理成一份完整、可交付的“游戏营销前期调研报告”。
+
+项目基础信息：
+项目名称：${form.projectName || "未识别"}
+游戏名称：${form.gameName || "未识别"}
+项目类型：${form.projectType || "未识别"}
+营销目标：${form.marketingGoal || "未识别"}
+约束/禁忌：${form.forbidden || "暂无"}
+
+Brief 拆解：
+${briefContext || "暂无"}
+
+固定模块分析：
+${Object.entries(fixedOutputs).map(([name, output]) => `【${name}】\n${output}`).join("\n\n") || "暂无"}
+
+可变模块分析：
+${Object.entries(variableOutputs).map(([name, output]) => `【${name}】\n${output}`).join("\n\n") || "暂无"}
+
+请输出以下结构：
+一、项目需求总览
+二、核心调研结论
+三、固定模块结论
+四、可变模块结论
+五、营销机会与风险
+六、可直接进入策略方案的建议
+七、待补充数据与客户确认 QA
+
+要求：语言短、准、可落地；每段都服务后续策略方案，不要写成资料堆砌。`;
 }
 
 function inferModelsEndpoint(endpoint: string) {
@@ -2037,18 +2492,8 @@ function generateProjectTasks(project: Project): ProjectTask[] {
   ];
 }
 
-const jobsSeed: AiJob[] = [
-  { id: 1, type: "Brief 解析", name: "星河边境 Brief 需求解构", owner: "陈舟", createdAt: "11:10", status: "成功", source: "客户Brief.docx" },
-  { id: 2, type: "文档解析", name: "二次元手游新品上线投标方案", owner: "林岚", createdAt: "10:48", status: "成功", source: "资料库" },
-  { id: 3, type: "排期生成", name: "星河边境项目排期", owner: "周齐", createdAt: "10:22", status: "成功", source: "项目跟进" },
-];
-
-const membersSeed: Member[] = [
-  { id: 1, name: "周齐", role: "主策划", status: "正常", monthlyCapacity: 8, avgDeliveryDays: 5, skills: ["新品上线", "投标", "策略统筹"] },
-  { id: 2, name: "林岚", role: "调研策划", status: "正常", monthlyCapacity: 10, avgDeliveryDays: 3, skills: ["用户洞察", "竞品分析", "女性向"] },
-  { id: 3, name: "陈舟", role: "执行策划", status: "加班", monthlyCapacity: 9, avgDeliveryDays: 4, skills: ["方案大纲", "二次元", "活动推广"] },
-  { id: 4, name: "王西", role: "执行策划", status: "正常", monthlyCapacity: 7, avgDeliveryDays: 6, skills: ["商务协同", "PPT跟进", "内部评审"] },
-];
+const jobsSeed = importedJobsSeed as AiJob[];
+const membersSeed = importedMembersSeed as Member[];
 
 const userInsightSeed: UserInsightProfile[] = [
   {
@@ -2224,6 +2669,7 @@ const archiveSeed: MarketingArchiveItem[] = [
 ];
 
 function App() {
+  const [currentUser, setCurrentUser] = usePersistentState<AuthUser | null>("strategy-center-current-user", null);
   const [page, setPage] = useState<Page>("home");
   const [projects, setProjects] = usePersistentState<Project[]>("strategy-center-projects", projectsSeed);
   const [resources, setResources] = usePersistentState<Resource[]>("strategy-center-resources", resourcesSeed);
@@ -2233,12 +2679,15 @@ function App() {
   const [selectedProjectTab, setSelectedProjectTab] = useState("概览");
   const [selectedResourceId, setSelectedResourceId] = useState(1);
   const [briefOutput, setBriefOutput] = usePersistentState("strategy-center-brief-output", "");
+  const [schemeOutlineOutput, setSchemeOutlineOutput] = usePersistentState("strategy-center-scheme-outline-output", "");
   const [outlineOutput, setOutlineOutput] = usePersistentState("strategy-center-outline-output", "");
   const [contentAuditOutput, setContentAuditOutput] = usePersistentState("strategy-center-content-audit-output", "");
   const [outlineTab, setOutlineTab] = useState<OutlineTab>("template");
   const [assistantTab, setAssistantTab] = useState<AssistantTab>("brief");
+  const [peopleInitialDetail, setPeopleInitialDetail] = useState<PeopleDetailView | null>(null);
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const selectedResource = resources.find((resource) => resource.id === selectedResourceId) ?? resources[0];
+  const isAdmin = currentUser?.role === "admin";
 
   useEffect(() => {
     setProjects((current) => {
@@ -2272,6 +2721,12 @@ function App() {
     setPage("projectDetail");
   };
 
+  const openPeopleDetail = (detail: PeopleDetailView) => {
+    if (!isAdmin) return;
+    setPeopleInitialDetail(detail);
+    setPage("people");
+  };
+
   const navigateResource = (id: number) => {
     setSelectedResourceId(id);
     setPage("resourceDetail");
@@ -2290,6 +2745,7 @@ function App() {
   };
 
   const deleteResource = (resourceId: number) => {
+    if (!isAdmin) return;
     const resource = resources.find((item) => item.id === resourceId);
     setResources((current) => current.filter((item) => item.id !== resourceId));
     setProjects((current) =>
@@ -2299,20 +2755,30 @@ function App() {
     setPage("resources");
   };
 
+  const logout = () => {
+    setCurrentUser(null);
+    setPage("home");
+  };
+
+  if (!currentUser) {
+    return <LoginPage onLogin={setCurrentUser} />;
+  }
+
   return (
     <div className="app-shell">
-      <Sidebar page={page} setPage={setPage} />
+      <Sidebar page={page} setPage={setPage} user={currentUser} />
       <main className="workspace">
-        <Topbar projects={projects} resources={resources} jobs={jobs} setPage={setPage} openProject={navigateProject} openResource={navigateResource} />
-        {page === "home" && <Home projects={projects} members={members} jobs={jobs} setPage={setPage} openProject={navigateProject} openAssistant={openAssistant} openOutline={openOutline} />}
+        <Topbar page={page} projects={projects} resources={resources} jobs={jobs} user={currentUser} onLogout={logout} setPage={setPage} openProject={navigateProject} openResource={navigateResource} />
+        {page === "home" && <Home projects={projects} members={members} jobs={jobs} canOpenPeople={isAdmin} setPage={setPage} openProject={navigateProject} openPeopleDetail={openPeopleDetail} openAssistant={openAssistant} openOutline={openOutline} />}
         {page === "projects" && <Projects projects={projects} members={members} openProject={navigateProject} setProjects={setProjects} addJob={addJob} />}
         {page === "projectDetail" && <ProjectDetail project={selectedProject} initialTab={selectedProjectTab} members={members} projects={projects} resources={resources} openResource={navigateResource} setPage={setPage} setProjects={setProjects} addJob={addJob} />}
-        {page === "people" && <PeopleManagement members={members} setMembers={setMembers} projects={projects} openProject={navigateProject} addJob={addJob} />}
-        {page === "marketingResearch" && <MarketingResearch addJob={addJob} />}
+        {page === "people" && (isAdmin ? <PeopleManagement members={members} setMembers={setMembers} projects={projects} isAdmin={isAdmin} initialDetailView={peopleInitialDetail} clearInitialDetailView={() => setPeopleInitialDetail(null)} openProject={navigateProject} addJob={addJob} /> : <AccessDenied setPage={setPage} />)}
+        {page === "marketingResearch" && <MarketingResearchBoard resources={resources} briefOutput={briefOutput} addJob={addJob} />}
         {page === "research" && <MarketingResearchBoard resources={resources} briefOutput={briefOutput} addJob={addJob} />}
         {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} />}
-        {page === "resourceUpload" && <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} />}
+        {page === "resourceUpload" && (isAdmin ? <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} /> : <AccessDenied setPage={setPage} />)}
         {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} />}
+        {page === "script" && <ScriptAssistant resources={resources} addJob={addJob} />}
         {page === "brief" && (
           <SchemeAssistant
             activeTab={assistantTab}
@@ -2325,6 +2791,8 @@ function App() {
             openOutline={openOutline}
             outlineOutput={outlineOutput}
             setOutlineOutput={setOutlineOutput}
+            schemeOutlineOutput={schemeOutlineOutput}
+            setSchemeOutlineOutput={setSchemeOutlineOutput}
             contentAuditOutput={contentAuditOutput}
             setContentAuditOutput={setContentAuditOutput}
             outlineTab={outlineTab}
@@ -2346,6 +2814,8 @@ function App() {
             openOutline={openOutline}
             outlineOutput={outlineOutput}
             setOutlineOutput={setOutlineOutput}
+            schemeOutlineOutput={schemeOutlineOutput}
+            setSchemeOutlineOutput={setSchemeOutlineOutput}
             contentAuditOutput={contentAuditOutput}
             setContentAuditOutput={setContentAuditOutput}
             outlineTab={outlineTab}
@@ -2353,24 +2823,84 @@ function App() {
           />
         )}
         {page === "aiJobs" && <AiJobs jobs={jobs} />}
-        {page === "settings" && <Settings />}
+        {page === "settings" && (isAdmin ? <Settings /> : <AccessDenied setPage={setPage} />)}
       </main>
     </div>
   );
 }
 
-function Sidebar({ page, setPage }: { page: Page; setPage: (page: Page) => void }) {
-  const items: Array<{ key: Page; label: string; icon: string }> = [
+function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => void }) {
+  const [account, setAccount] = useState("admin");
+  const [password, setPassword] = useState("admin123");
+  const [message, setMessage] = useState("");
+
+  const submitLogin = () => {
+    const matched = demoUsers.find((user) => user.account === account.trim() && user.password === password);
+    if (!matched) {
+      setMessage("账号或密码不正确。可用 admin/admin123 或 user/user123 体验。");
+      return;
+    }
+    onLogin({ name: matched.name, role: matched.role });
+  };
+
+  return (
+    <main className="login-page">
+      <section className="login-panel">
+        <div className="login-brand">
+          <div className="brand-mark">策</div>
+          <div>
+            <strong>策略中心</strong>
+            <span>AI Workbench</span>
+          </div>
+        </div>
+        <h1>登录工作台</h1>
+        <p>根据登录人员角色进入不同权限视图。</p>
+        <label>
+          <span>账号</span>
+          <input value={account} onChange={(event) => setAccount(event.target.value)} placeholder="admin 或 user" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="admin123 或 user123" onKeyDown={(event) => { if (event.key === "Enter") submitLogin(); }} />
+        </label>
+        {message && <div className="login-message">{message}</div>}
+        <button className="primary-button wide" onClick={submitLogin}>登录</button>
+        <div className="login-demo-row">
+          {demoUsers.map((user) => (
+            <button key={user.account} className="ghost-button" onClick={() => { setAccount(user.account); setPassword(user.password); }}>
+              {user.title}
+            </button>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function AccessDenied({ setPage }: { setPage: (page: Page) => void }) {
+  return (
+    <section className="page">
+      <Card title="暂无权限">
+        <p className="muted">当前账号为普通用户，无法访问该管理页面。</p>
+        <button className="primary-button" onClick={() => setPage("home")}>返回首页</button>
+      </Card>
+    </section>
+  );
+}
+
+function Sidebar({ page, setPage, user }: { page: Page; setPage: (page: Page) => void; user: AuthUser }) {
+  const allItems: Array<{ key: Page; label: string; icon: string; adminOnly?: boolean }> = [
     { key: "home", label: "首页", icon: "⌂" },
     { key: "projects", label: "项目跟进", icon: "▦" },
-    { key: "people", label: "人员管理", icon: "◉" },
-    { key: "marketingResearch", label: "营销调研", icon: "◈" },
-    { key: "research", label: "调研看板", icon: "◌" },
+    { key: "people", label: "人员管理", icon: "◉", adminOnly: true },
+    { key: "research", label: "营销调研", icon: "◈" },
     { key: "brief", label: "方案助手", icon: "✦" },
+    { key: "script", label: "讲稿输出", icon: "◐" },
     { key: "resources", label: "资料库", icon: "◫" },
     { key: "aiJobs", label: "AI 任务记录", icon: "◎" },
-    { key: "settings", label: "系统设置", icon: "⚙" },
+    { key: "settings", label: "系统设置", icon: "⚙", adminOnly: true },
   ];
+  const items = allItems.filter((item) => !item.adminOnly || user.role === "admin");
 
   return (
     <aside className="sidebar">
@@ -2390,9 +2920,9 @@ function Sidebar({ page, setPage }: { page: Page; setPage: (page: Page) => void 
         ))}
       </nav>
       <div className="sidebar-card">
-        <span>试点版本</span>
-        <strong>MVP 0.1</strong>
-        <p>资料库、方案助手、项目跟进已接入前端流程。</p>
+        <span>{user.role === "admin" ? "管理员模式" : "普通用户模式"}</span>
+        <strong>{user.name}</strong>
+        <p>{user.role === "admin" ? "可维护人员、系统设置和资料管理。" : "可使用项目、调研、方案和讲稿工作台。"}</p>
       </div>
     </aside>
   );
@@ -2402,19 +2932,26 @@ type SearchResult =
   | { id: string; kind: "项目"; title: string; meta: string; detail: string; action: () => void }
   | { id: string; kind: "任务"; title: string; meta: string; detail: string; action: () => void }
   | { id: string; kind: "资料"; title: string; meta: string; detail: string; action: () => void }
-  | { id: string; kind: "AI"; title: string; meta: string; detail: string; action: () => void };
+  | { id: string; kind: "AI"; title: string; meta: string; detail: string; action: () => void }
+  | { id: string; kind: "页面"; title: string; meta: string; detail: string; action: () => void };
 
 function Topbar({
+  page,
   projects,
   resources,
   jobs,
+  user,
+  onLogout,
   setPage,
   openProject,
   openResource,
 }: {
+  page: Page;
   projects: Project[];
   resources: Resource[];
   jobs: AiJob[];
+  user: AuthUser;
+  onLogout: () => void;
   setPage: (page: Page) => void;
   openProject: (id: number, initialTab?: string) => void;
   openResource: (id: number) => void;
@@ -2431,6 +2968,18 @@ function Topbar({
         .join(" ")
         .toLowerCase();
     const includesQuery = (values: Array<string | number | undefined | null | string[]>) => searchText(values).includes(normalizedQuery);
+    const allPageSearchItems: SearchResult[] = [
+      { id: "page-projects", kind: "页面", title: "项目跟进", meta: "项目列表 / 甘特图", detail: "查看项目状态、负责人、风险和排期。", action: () => setPage("projects") },
+      { id: "page-people", kind: "页面", title: "人员管理", meta: "成员 / 负载 / 分工", detail: "查看项目人员分工总表、成员负载和延期任务。", action: () => setPage("people") },
+      { id: "page-marketing", kind: "页面", title: "营销调研", meta: "Brief / 固定模块 / 可变模块", detail: "进入游戏营销前期调研工作台。", action: () => setPage("marketingResearch") },
+      { id: "page-brief", kind: "页面", title: "方案助手", meta: "Brief 解析 / PPT 模板", detail: "进入方案助手，生成 Brief 解析、方案大纲和内容检查。", action: () => setPage("brief") },
+      { id: "page-script", kind: "页面", title: "讲稿输出", meta: "逐字稿 / 答辩物料", detail: "根据方案 PPT 和资料库生成宣讲稿。", action: () => setPage("script") },
+      { id: "page-resources", kind: "页面", title: "资料库", meta: "历史方案 / 竞品资料 / 复盘", detail: "检索、上传和复用策略资产。", action: () => setPage("resources") },
+      { id: "page-ai", kind: "页面", title: "AI 任务记录", meta: "生成记录", detail: "查看 AI 解析、生成、排期任务。", action: () => setPage("aiJobs") },
+      { id: "page-settings", kind: "页面", title: "系统设置", meta: "全局 AI / 检索方式", detail: "配置全局 AI 接口、模型和知识库检索方式。", action: () => setPage("settings") },
+    ];
+    const pageSearchItems = allPageSearchItems.filter((item) => user.role === "admin" || !["page-settings", "page-people"].includes(item.id));
+    const pageResults = pageSearchItems.filter((item) => includesQuery([item.title, item.meta, item.detail]));
     const projectResults: SearchResult[] = projects
       .filter((project) =>
         includesQuery([
@@ -2497,7 +3046,7 @@ function Topbar({
         detail: `${job.source} / ${job.createdAt}`,
         action: () => setPage("aiJobs"),
       }));
-    return [...projectResults, ...taskResults, ...resourceResults, ...jobResults].slice(0, 8);
+    return [...pageResults, ...projectResults, ...taskResults, ...resourceResults, ...jobResults].slice(0, 8);
   }, [jobs, normalizedQuery, openProject, openResource, projects, resources, setPage]);
 
   const openResult = (result: SearchResult) => {
@@ -2508,8 +3057,9 @@ function Topbar({
   const showPanel = focused && Boolean(query.trim());
 
   return (
-    <header className="topbar">
-      <div
+    <header className={`topbar ${page !== "home" ? "compact-topbar" : ""}`}>
+      {page === "home" && (
+        <div
         className="search-shell"
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
@@ -2561,8 +3111,16 @@ function Topbar({
           </div>
         )}
       </div>
+      )}
       <div className="topbar-actions">
-        <div className="avatar">ZY</div>
+        <div className="user-chip">
+          <div className="avatar">{user.role === "admin" ? "AD" : "U"}</div>
+          <div>
+            <strong>{user.name}</strong>
+            <span>{user.role === "admin" ? "管理员" : "普通用户"}</span>
+          </div>
+        </div>
+        <button className="ghost-button" onClick={onLogout}>退出</button>
       </div>
     </header>
   );
@@ -2572,16 +3130,20 @@ function Home({
   projects,
   members,
   jobs,
+  canOpenPeople,
   setPage,
   openProject,
+  openPeopleDetail,
   openAssistant,
   openOutline,
 }: {
   projects: Project[];
   members: Member[];
   jobs: AiJob[];
+  canOpenPeople: boolean;
   setPage: (page: Page) => void;
   openProject: (id: number, initialTab?: string) => void;
+  openPeopleDetail: (detail: PeopleDetailView) => void;
   openAssistant: (tab?: AssistantTab) => void;
   openOutline: (tab?: OutlineTab) => void;
 }) {
@@ -2629,10 +3191,10 @@ function Home({
         </div>
       </div>
       <div className="metric-grid">
-        <Metric label="进行中项目" value={activeProjects.length} tone="blue" />
-        <Metric label="我的待办" value={dueTasks.length} tone="green" />
-        <Metric label="平均进度" value={`${averageProgress}%`} tone="orange" />
-        <Metric label="已延期" value={overdueTasks.length} tone="red" />
+        <Metric label="进行中项目" value={activeProjects.length} tone="blue" onClick={() => setPage("projects")} />
+        <Metric label="我的待办" value={dueTasks.length} tone="green" onClick={() => canOpenPeople ? openPeopleDetail("active") : setPage("projects")} />
+        <Metric label="平均进度" value={`${averageProgress}%`} tone="orange" onClick={() => setPage("projects")} />
+        <Metric label="已延期" value={overdueTasks.length} tone="red" onClick={() => canOpenPeople ? openPeopleDetail("delayed") : setPage("projects")} />
       </div>
       <div className="dashboard-grid">
         <Card title="项目风险分布">
@@ -2759,6 +3321,7 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
     ownerId: "",
   });
   const [bidPeriod, setBidPeriod] = useState<"月" | "季度" | "年">("月");
+  const [bidQuickFilter, setBidQuickFilter] = useState<BidQuickFilter>(null);
   const [form, setForm] = useState({
     name: "",
     game: "",
@@ -2813,9 +3376,19 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
   const projectTypes = Array.from(new Set(projects.map((project) => project.type).filter(Boolean)));
   const projectStatuses = Array.from(new Set(projects.map((project) => project.status).filter(Boolean)));
   const bidAnalysis = buildBidAnalysis(projects, bidPeriod);
+  const activeProjects = projects.filter((project) => project.status !== "已完成");
+  const averageProgress = projects.length ? Math.round(projects.reduce((total, project) => total + projectProgress(project), 0) / projects.length) : 0;
+  const highRiskProjects = projects.filter((project) => ["紧急", "严重"].includes(inferProjectRisk(project))).length;
   const filteredProjects = projects.filter((project) => {
+    const bidResult = projectBidResult(project);
+    const matchesBidQuickFilter =
+      !bidQuickFilter ||
+      (bidQuickFilter === "finished" && bidResult !== "跟进中") ||
+      (bidQuickFilter === "won" && bidResult === "中标") ||
+      (bidQuickFilter === "lost" && bidResult === "未中标");
     const corpus = `${project.name}${project.game}${project.client}${project.type}${project.stage}${memberName(members, project.ownerId, project.owner)}`;
     return (
+      matchesBidQuickFilter &&
       (!filters.query.trim() || corpus.includes(filters.query.trim())) &&
       (!filters.status || project.status === filters.status) &&
       (!filters.type || project.type === filters.type) &&
@@ -2857,7 +3430,7 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
     <section className="page">
       <PageTitle
         title="项目跟进"
-        subtitle="查看项目、关键节点、风险等级和负责人。"
+        subtitle="项目总览、投标汇总和项目入口。点击项目进入详情页查看排期、资料、风险和复盘。"
         action={<div className="card-actions"><button className="ghost-button" onClick={exportProjects}>导出列表</button><button className="primary-button" onClick={() => setShowForm((current) => !current)}>新建项目</button></div>}
       />
       {showForm && (
@@ -2890,6 +3463,31 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
           <button className="primary-button wide" onClick={createProject}>保存并生成排期</button>
         </Card>
       )}
+      <div className="metric-grid">
+        <Metric label="项目总数" value={projects.length} tone="blue" />
+        <Metric label="进行中项目" value={activeProjects.length} tone="green" />
+        <Metric label="中标率" value={`${winRate(bidAnalysis.won.length, bidAnalysis.finished.length)}%`} tone="orange" />
+        <Metric label="高风险项目" value={highRiskProjects} tone="red" />
+      </div>
+      <Card title="项目汇总">
+        <div className="project-summary-grid">
+          <div className="summary-block">
+            <span>整体进度</span>
+            <strong>{averageProgress}%</strong>
+            <p>已完结投标 {bidAnalysis.finished.length} 个，中标 {bidAnalysis.won.length} 个，未中标 {bidAnalysis.lost.length} 个。</p>
+          </div>
+          <div className="summary-block">
+            <span>风险重点</span>
+            <strong>{highRiskProjects ? `${highRiskProjects} 个需关注` : "暂无高风险"}</strong>
+            <p>{bidAnalysis.lostReasons[0] ? `未中标高频原因：${bidAnalysis.lostReasons[0].key}，涉及 ${bidAnalysis.lostReasons[0].total} 个项目。` : "暂未形成明确未中标原因样本。"}</p>
+          </div>
+          <div className="summary-block">
+            <span>筛选结果</span>
+            <strong>{filteredProjects.length} 个项目</strong>
+            <p>当前列表按搜索、状态、类型、风险和负责人筛选。点击项目名称进入详情页。</p>
+          </div>
+        </div>
+      </Card>
       <div className="filter-bar">
         <input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="搜索项目、游戏、客户、负责人" />
         <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
@@ -2909,8 +3507,18 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
           {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
         </select>
       </div>
-      <BidAnalyticsPanel projects={projects} analysis={bidAnalysis} period={bidPeriod} setPeriod={setBidPeriod} />
-      <ProjectGanttOverview projects={filteredProjects} members={members} openProject={openProject} />
+      <div className="project-quick-stats">
+        <button className={bidQuickFilter === "finished" ? "active" : ""} onClick={() => setBidQuickFilter(bidQuickFilter === "finished" ? null : "finished")}>已完结投标 {bidAnalysis.finished.length}</button>
+        <button className={bidQuickFilter === "won" ? "active" : ""} onClick={() => setBidQuickFilter(bidQuickFilter === "won" ? null : "won")}>中标项目 {bidAnalysis.won.length}</button>
+        <button className={bidQuickFilter === "lost" ? "active" : ""} onClick={() => setBidQuickFilter(bidQuickFilter === "lost" ? null : "lost")}>未中标项目 {bidAnalysis.lost.length}</button>
+        <button onClick={() => setBidQuickFilter(null)}>全部项目 {projects.length}</button>
+      </div>
+      {bidQuickFilter && (
+        <div className="filter-chip-row">
+          <span>{bidQuickFilter === "finished" ? "已筛选：已完结投标" : bidQuickFilter === "won" ? "已筛选：中标项目" : "已筛选：未中标项目"}</span>
+          <button className="link-button" onClick={() => setBidQuickFilter(null)}>清除筛选</button>
+        </div>
+      )}
       <Card title="项目列表">
         <table>
           <thead>
@@ -2922,29 +3530,29 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
               <th>负责人</th>
               <th>当前阶段</th>
               <th>方案提交</th>
+              <th>投标结果</th>
               <th>风险</th>
-              <th>操作</th>
             </tr>
           </thead>
           <tbody>
             {filteredProjects.map((project) => (
-              <tr key={project.id}>
-                <td>{project.name}</td>
+              <tr key={project.id} className="clickable-table-row" onClick={() => openProject(project.id)}>
+                <td><button className="project-name-button" onClick={(event) => { event.stopPropagation(); openProject(project.id); }}>{project.name}</button></td>
                 <td>{project.game}</td>
                 <td>{project.client}</td>
                 <td>{project.type}</td>
                 <td>{memberName(members, project.ownerId, project.owner)}</td>
                 <td>{project.stage}</td>
                 <td>{project.submit}</td>
+                <td>{projectBidResult(project)}</td>
                 <td><RiskBadge risk={project.risk} /></td>
-                <td>
-                  <div className="table-actions">
-                    <button className="link-button" onClick={() => openProject(project.id)}>查看</button>
-                    <button className="link-button danger" onClick={() => removeProject(project.id)}>删除</button>
-                  </div>
-                </td>
               </tr>
             ))}
+            {!filteredProjects.length && (
+              <tr>
+                <td colSpan={9}><div className="empty-inline">暂无符合筛选条件的项目</div></td>
+              </tr>
+            )}
           </tbody>
         </table>
       </Card>
@@ -2952,7 +3560,19 @@ function Projects({ projects, members, openProject, setProjects, addJob }: { pro
   );
 }
 
-function BidAnalyticsPanel({ projects, analysis, period, setPeriod }: { projects: Project[]; analysis: ReturnType<typeof buildBidAnalysis>; period: "月" | "季度" | "年"; setPeriod: (period: "月" | "季度" | "年") => void }) {
+function BidAnalyticsPanel({
+  projects,
+  analysis,
+  period,
+  setPeriod,
+  onQuickFilter,
+}: {
+  projects: Project[];
+  analysis: ReturnType<typeof buildBidAnalysis>;
+  period: "月" | "季度" | "年";
+  setPeriod: (period: "月" | "季度" | "年") => void;
+  onQuickFilter: (filter: BidQuickFilter) => void;
+}) {
   const total = analysis.finished.length;
   const rate = winRate(analysis.won.length, total);
   const maxTrendTotal = Math.max(...analysis.trend.map((item) => item.total), 1);
@@ -2975,10 +3595,10 @@ function BidAnalyticsPanel({ projects, analysis, period, setPeriod }: { projects
       }
     >
       <div className="bid-metric-grid">
-        <Metric label="已完结投标" value={total} tone="blue" />
-        <Metric label="中标项目" value={analysis.won.length} tone="green" />
-        <Metric label="未中标项目" value={analysis.lost.length} tone="red" />
-        <div className="metric metric-orange"><span>中标率</span><strong>{rate}%</strong></div>
+        <Metric label="已完结投标" value={total} tone="blue" onClick={() => onQuickFilter("finished")} />
+        <Metric label="中标项目" value={analysis.won.length} tone="green" onClick={() => onQuickFilter("won")} />
+        <Metric label="未中标项目" value={analysis.lost.length} tone="red" onClick={() => onQuickFilter("lost")} />
+        <Metric label="中标率" value={`${rate}%`} tone="orange" onClick={() => onQuickFilter("finished")} />
       </div>
       <div className="bid-dashboard">
         <div className="trend-panel">
@@ -3885,6 +4505,8 @@ function SchemeAssistant({
   openOutline,
   outlineOutput,
   setOutlineOutput,
+  schemeOutlineOutput,
+  setSchemeOutlineOutput,
   contentAuditOutput,
   setContentAuditOutput,
   outlineTab,
@@ -3900,6 +4522,8 @@ function SchemeAssistant({
   openOutline: (tab?: OutlineTab) => void;
   outlineOutput: string;
   setOutlineOutput: (value: string) => void;
+  schemeOutlineOutput: string;
+  setSchemeOutlineOutput: (value: string) => void;
   contentAuditOutput: string;
   setContentAuditOutput: (value: string) => void;
   outlineTab: OutlineTab;
@@ -3910,6 +4534,7 @@ function SchemeAssistant({
       <PageTitle title="方案助手" subtitle="把客户 Brief 解析、PPT 模板生成和内容检查收拢到同一个方案工作流。" />
       <div className="tabs assistant-tabs">
         <button className={`tab ${activeTab === "brief" ? "active" : ""}`} onClick={() => setActiveTab("brief")}>Brief 解析</button>
+        <button className={`tab ${activeTab === "outline" ? "active" : ""}`} onClick={() => setActiveTab("outline")}>大纲生成</button>
         <button className={`tab ${activeTab === "template" ? "active" : ""}`} onClick={() => setActiveTab("template")}>生成 PPT 模板</button>
       </div>
       {activeTab === "brief" ? (
@@ -3920,6 +4545,14 @@ function SchemeAssistant({
           resources={resources}
           setPage={setPage}
           openOutline={openOutline}
+          addJob={addJob}
+          embedded
+        />
+      ) : activeTab === "outline" ? (
+        <SchemeOutlineAssistant
+          briefOutput={briefOutput}
+          output={schemeOutlineOutput}
+          setOutput={setSchemeOutlineOutput}
           addJob={addJob}
           embedded
         />
@@ -3959,19 +4592,12 @@ function BriefAssistant({
   addJob: (type: string, name: string, source: string) => void;
   embedded?: boolean;
 }) {
-  const [apiConfig, setApiConfig] = usePersistentState<BriefApiConfig>("strategy-center-brief-api-config", {
-    endpoint: "",
-    apiKey: "",
-    model: "",
-  });
+  const [apiConfig] = useGlobalAiConfig();
   const [isRunning, setIsRunning] = useState(false);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [parsedFiles, setParsedFiles] = useState<BriefInputFile[]>([]);
   const [isParsingFiles, setIsParsingFiles] = useState(false);
   const [fileMessage, setFileMessage] = useState("");
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [modelMessage, setModelMessage] = useState("");
   const [form, setForm] = useState({
     projectName: "",
     gameName: "",
@@ -4045,38 +4671,6 @@ function BriefAssistant({
     }
   };
 
-  const loadModels = async () => {
-    setIsLoadingModels(true);
-    setModelMessage("");
-    try {
-      if (!inferModelsEndpoint(apiConfig.endpoint)) throw new Error("请先填写接口地址。");
-      const response = await fetch("/api/brief-models", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          endpoint: apiConfig.endpoint,
-          apiKey: apiConfig.apiKey,
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || result.error || "模型列表拉取失败。");
-      const models = Array.isArray(result.data)
-        ? result.data.map((item: { id?: string; name?: string }) => item.id || item.name).filter(Boolean)
-        : Array.isArray(result.models)
-          ? result.models.map((item: string | { id?: string; name?: string }) => (typeof item === "string" ? item : item.id || item.name)).filter(Boolean)
-          : [];
-      if (!models.length) throw new Error("接口返回中没有找到模型列表。");
-      setModelOptions(models);
-      setApiConfig((current) => ({ ...current, model: current.model || models[0] }));
-      setModelMessage(`已拉取 ${models.length} 个模型。`);
-    } catch (error) {
-      setModelOptions([]);
-      setModelMessage(error instanceof Error ? error.message : "模型列表拉取失败。");
-    } finally {
-      setIsLoadingModels(false);
-    }
-  };
-
   const run = async () => {
     setIsRunning(true);
     try {
@@ -4125,7 +4719,7 @@ ${liveReferenceContext.text}`;
       setBriefOutput(`${buildBriefReportWithReferences(form, liveReferenceContext.text)}
 
 本次上传文件综合：
-${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name, file.content)}：${file.name}；${file.summary}`).join("\n") : "- 暂无上传文件，当前仅基于手动输入和历史参照生成。"}
+${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name, file.content)}：${file.name}；${file.summary}`).join("\n") : "- 暂无上传文件，请先上传客户 Brief、QA 或补充资料。"}
 
 客户确认 QA 优先级：
 1. 预算拆分、报价口径、权益明细和效果预估是否已有固定模板？
@@ -4146,16 +4740,10 @@ ${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name,
       {embedded && <div className="subpage-heading"><strong>Brief 解析</strong><span>上传或粘贴客户 Brief，生成需求解构和 QA 清单。</span></div>}
       <div className="split-panel">
         <Card title="输入信息">
-          <div className="form-grid">
-            <Field label="项目名称" value={form.projectName} onChange={(value) => setForm({ ...form, projectName: value })} />
-            <Field label="游戏名称" value={form.gameName} onChange={(value) => setForm({ ...form, gameName: value })} />
-            <Field label="项目类型" value={form.projectType} onChange={(value) => setForm({ ...form, projectType: value })} />
-            <Field label="方案用途" value={form.usage} onChange={(value) => setForm({ ...form, usage: value })} />
-          </div>
           <div className="brief-file-panel">
             <label className="upload-zone compact-upload">
               <strong>上传本次项目输入文件</strong>
-              <span>支持客户 Brief、QA、补充资料、Excel、Word、PDF、TXT</span>
+              <span>支持客户 Brief、QA、补充资料、Excel、Word、PDF、TXT；AI 会自动解析项目名称、游戏名称、项目类型、用途、禁忌和需求约束</span>
               <input type="file" multiple onChange={(event) => addBriefFiles(event.target.files)} />
               <em>{selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件` : "点击选择文件"}</em>
             </label>
@@ -4185,30 +4773,7 @@ ${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name,
               </div>
             )}
           </div>
-          <textarea value={form.forbidden} onChange={(event) => setForm({ ...form, forbidden: event.target.value })} placeholder="禁忌要求，例如：不可使用负面热点、不可过度强调氪金、不可提未确认资源..." />
-          <textarea value={form.brief} onChange={(event) => setForm({ ...form, brief: event.target.value })} placeholder="可选：粘贴额外客户沟通记录、会议纪要或人工补充说明..." />
-          <div className="note-box">
-            <strong>API 调用接口</strong>
-            <p>填写接口地址后会调用外部 Brief 解析 API；留空则使用本地规则生成报告。</p>
-            <div className="form-grid compact-grid">
-              <Field label="接口地址" value={apiConfig.endpoint} onChange={(value) => setApiConfig({ ...apiConfig, endpoint: value })} />
-              <label>
-                <span>API Key</span>
-                <input type="password" value={apiConfig.apiKey} onChange={(event) => setApiConfig({ ...apiConfig, apiKey: event.target.value })} placeholder="可选，自动放入 Authorization Bearer" />
-              </label>
-              <label>
-                <span>模型</span>
-                <select value={apiConfig.model} onChange={(event) => setApiConfig({ ...apiConfig, model: event.target.value })}>
-                  <option value="">先拉取模型列表</option>
-                  {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
-                </select>
-              </label>
-            </div>
-            <div className="inline-actions">
-              <button className="ghost-button" onClick={loadModels} disabled={isLoadingModels}>{isLoadingModels ? "拉取中..." : "拉取模型列表"}</button>
-              {modelMessage && <span>{modelMessage}</span>}
-            </div>
-          </div>
+          <GlobalAiConfigNotice apiConfig={apiConfig} />
           <button className="primary-button wide" onClick={run} disabled={isRunning}>{isRunning ? "解析中..." : "开始解析"}</button>
         </Card>
         <div className="stack-panel">
@@ -4234,7 +4799,7 @@ ${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name,
               </div>
             }
           >
-            <pre className="ai-output">{briefOutput || "填写左侧信息后，AI 将结合历史需求、QA 答疑和中标案例输出需求解构、风险点和客户确认 QA。"}</pre>
+            <pre className="ai-output">{briefOutput || "上传并解析 Brief / QA / 补充资料后，AI 将自动识别项目基础信息、核心需求、约束条件、风险点和客户确认 QA，并结合历史需求、QA 答疑和中标案例输出需求解构报告。"}</pre>
           </Card>
         </div>
       </div>
@@ -4254,6 +4819,100 @@ function ReferenceColumn({ title, items }: { title: string; items: Array<{ title
         </div>
       )) : <p className="muted">暂无匹配资料</p>}
     </div>
+  );
+}
+
+function SchemeOutlineAssistant({
+  briefOutput,
+  output,
+  setOutput,
+  addJob,
+  embedded = false,
+}: {
+  briefOutput: string;
+  output: string;
+  setOutput: (value: string) => void;
+  addJob: (type: string, name: string, source: string) => void;
+  embedded?: boolean;
+}) {
+  const [form, setForm] = usePersistentState("strategy-center-scheme-outline-form", {
+    direction: "品牌认知提升 / 新品上线转化 / 老玩家回流",
+    theme: "",
+    audience: "",
+    notes: "",
+  });
+
+  const runOutline = () => {
+    const result = `一、方案方向判断
+- 本次方案方向：${form.direction || "需补充方向"}。
+- 核心主题 / 主张：${form.theme || "建议根据 Brief 解析报告提炼一个清晰主张。"}
+- 目标对象：${form.audience || "优先从 Brief 解析报告中的客户目标和玩家分层推断。"}
+
+二、核心策略大纲
+1. 项目背景与客户真实需求
+   - 提炼 Brief 中的显性目标、隐性期待和约束条件。
+   - 说明为什么当前节点需要做这套方案。
+2. 用户与市场洞察
+   - 目标用户是谁、他们当前的兴趣点和阻力是什么。
+   - 结合竞品/历史案例说明机会窗口。
+3. 方案核心主张
+   - 围绕“${form.theme || "核心主题"}”建立一句话策略。
+   - 拆出 2-3 个可落地的传播抓手。
+4. 创意与内容机制
+   - 内容主线、互动玩法、渠道打法和素材类型。
+   - 明确哪些内容适合破圈，哪些适合转化。
+5. 执行计划
+   - 预热期、爆发期、延续期、复盘期。
+   - 对应负责人、交付物和关键节点。
+6. 风险与兜底
+   - 预算、时间、素材授权、舆情、竞品干扰。
+   - 给出可执行的调整预案。
+7. 成效预估与复盘方式
+   - 明确曝光、互动、转化、口碑等指标。
+   - 说明如何沉淀为后续可复用资产。
+
+三、建议 PPT 章节
+- 封面：${form.theme || "方案主题"}。
+- 目录：背景洞察 / 核心策略 / 创意机制 / 执行计划 / 风险预算 / 复盘指标。
+- 背景页：Brief 需求和项目挑战。
+- 洞察页：用户、产品、竞品、行业机会。
+- 策略页：核心主张和打法总览。
+- 创意页：内容机制和传播素材。
+- 执行页：排期、分工、资源需求。
+- 收束页：优势亮点、风险预案、效果预估。
+
+四、Brief 解析依据
+${briefOutput ? summarize(briefOutput, 1200) : "暂未生成 Brief 解析报告，建议先完成 Brief 解析后再生成大纲。"}
+
+五、补充要求吸收
+${form.notes || "暂无额外补充。"}`;
+    setOutput(result);
+    addJob("方案大纲", form.theme || "方案大纲生成", "方案助手");
+  };
+
+  return (
+    <section className={embedded ? "assistant-subpage" : "page"}>
+      {!embedded && <PageTitle title="大纲生成" subtitle="基于 Brief 解析报告和用户输入的方向、主题，构思方案大纲。" />}
+      {embedded && <div className="subpage-heading"><strong>大纲生成</strong><span>基于 Brief 解析报告和用户输入的方向、主题，构思方案大纲。</span></div>}
+      <div className="split-panel">
+        <Card title="大纲方向">
+          <div className="form-grid">
+            <Field label="方案方向" value={form.direction} onChange={(value) => setForm({ ...form, direction: value })} />
+            <Field label="主题 / 核心主张" value={form.theme} onChange={(value) => setForm({ ...form, theme: value })} />
+            <Field label="目标对象" value={form.audience} onChange={(value) => setForm({ ...form, audience: value })} />
+          </div>
+          <textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="补充要求：客户希望突出什么、避免什么、偏好的表达方式、必须出现的章节等。" />
+          <div className="note-box">
+            <strong>已读取 Brief 解析报告</strong>
+            <p>{briefOutput ? summarize(briefOutput) : "还没有 Brief 解析报告。可以先在 Brief 解析页上传文件并生成结构报告。"}</p>
+          </div>
+          <button className="primary-button wide" onClick={runOutline}>生成方案大纲</button>
+        </Card>
+        <Card title="方案大纲输出">
+          <pre className="ai-output">{output || "填写方向和主题后，点击“生成方案大纲”。这里会输出策略主线、章节结构、PPT 建议页和待补充信息。"}</pre>
+        </Card>
+      </div>
+    </section>
   );
 }
 
@@ -4533,436 +5192,795 @@ function MarketingResearchBoard({
   briefOutput: string;
   addJob: (type: string, name: string, source: string) => void;
 }) {
-  const [tab, setTab] = useState<ResearchTab>("user");
-  const [projectFocus, setProjectFocus] = useState("暑期版本拉新 + 核心玩家留存");
-  const [selectedUserId, setSelectedUserId] = useState(userInsightSeed[0]?.id ?? 0);
-  const [selectedCompetitorId, setSelectedCompetitorId] = useState(competitorSeed[0]?.id ?? 0);
-  const [selectedHotspotId, setSelectedHotspotId] = useState(hotspotSeed[0]?.id ?? 0);
-  const [selectedArchiveId, setSelectedArchiveId] = useState(archiveSeed[0]?.id ?? 0);
-  const [reportOutput, setReportOutput] = usePersistentState<MarketingResearchReport | null>("strategy-center-research-report-output", null);
+  const [tab, setTab] = useState<ResearchTab>("brief");
+  const [apiConfig] = useGlobalAiConfig();
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [parsedFiles, setParsedFiles] = useState<BriefInputFile[]>([]);
+  const [linkedResourceIds, setLinkedResourceIds] = usePersistentState<number[]>("strategy-center-marketing-linked-resources", []);
+  const [briefForm, setBriefForm] = useState({
+    projectName: "",
+    gameName: "",
+    projectType: "新品上线 / 版本更新 / 品牌联动 / 线下活动",
+    marketingGoal: "",
+    forbidden: "",
+    brief: "",
+  });
+  const [briefBreakdown, setBriefBreakdown] = usePersistentState("strategy-center-marketing-brief-breakdown", "");
+  const [activeFixedModule, setActiveFixedModule] = useState(fixedResearchModules[0].title);
+  const [fixedModuleOutputs, setFixedModuleOutputs] = usePersistentState<Record<string, string>>("strategy-center-fixed-module-outputs", {});
+  const [selectedVariableScenes, setSelectedVariableScenes] = usePersistentState<string[]>("strategy-center-selected-variable-scenes", []);
+  const [variableModuleOutputs, setVariableModuleOutputs] = usePersistentState<Record<string, string>>("strategy-center-variable-module-outputs", {});
+  const [finalReport, setFinalReport] = usePersistentState("strategy-center-final-marketing-research-report", "");
+  const [isParsingFiles, setIsParsingFiles] = useState(false);
+  const [isRunningBrief, setIsRunningBrief] = useState(false);
+  const [isRunningFixedModule, setIsRunningFixedModule] = useState(false);
+  const [isRunningVariableModule, setIsRunningVariableModule] = useState(false);
+  const [isRunningFinalReport, setIsRunningFinalReport] = useState(false);
+  const [fileMessage, setFileMessage] = useState("");
 
-  const selectedUser = userInsightSeed.find((item) => item.id === selectedUserId) ?? userInsightSeed[0];
-  const selectedCompetitor = competitorSeed.find((item) => item.id === selectedCompetitorId) ?? competitorSeed[0];
-  const selectedHotspot = hotspotSeed.find((item) => item.id === selectedHotspotId) ?? hotspotSeed[0];
-  const selectedArchive = archiveSeed.find((item) => item.id === selectedArchiveId) ?? archiveSeed[0];
+  const selectedFixedModule = fixedResearchModules.find((module) => module.title === activeFixedModule) ?? fixedResearchModules[0];
+  const selectedFixedOutput = fixedModuleOutputs[selectedFixedModule.title] || "";
+  const selectedVariableModules = variableResearchScenarios.filter((scenario) => selectedVariableScenes.includes(scenario.scene));
+  const linkedResources = resources.filter((resource) => linkedResourceIds.includes(resource.id));
+  const linkedResourceFiles = linkedResources.map(resourceToInputFile);
+  const allBriefInputFiles = [...parsedFiles, ...linkedResourceFiles];
+  const linkedResourceContext = buildResourceContext(linkedResources);
+  const extractedBriefText = `${briefBreakdown} ${briefForm.brief} ${allBriefInputFiles.map((file) => `${file.name} ${file.summary} ${file.content}`).join("\n")}`;
+  const recommendationContext = `${briefForm.projectName} ${briefForm.gameName} ${briefForm.projectType} ${briefForm.marketingGoal} ${briefForm.brief} ${briefBreakdown}`;
+  const recommendedResources = resources
+    .filter((resource) => !linkedResourceIds.includes(resource.id))
+    .map((resource) => ({ resource, score: scoreResource(resource, recommendationContext) }))
+    .filter((item) => item.score > 1)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map((item) => item.resource);
+  const extractedBriefInfo = {
+    projectName: briefForm.projectName || inferBriefFieldFromText(extractedBriefText, "projectName"),
+    gameName: briefForm.gameName || inferBriefFieldFromText(extractedBriefText, "gameName"),
+    projectType: briefForm.projectType || inferBriefFieldFromText(extractedBriefText, "projectType"),
+    marketingGoal: briefForm.marketingGoal || inferBriefFieldFromText(extractedBriefText, "marketingGoal"),
+  };
+  const fixedDoneCount = Object.keys(fixedModuleOutputs).filter((key) => key !== "_message" && fixedModuleOutputs[key]?.trim()).length;
+  const variableDoneCount = Object.keys(variableModuleOutputs).filter((key) => key !== "_message" && variableModuleOutputs[key]?.trim()).length;
+  const hasBriefInput = Boolean(briefForm.brief.trim() || parsedFiles.length || selectedFiles.length || linkedResources.length);
+  const hasBriefBreakdown = Boolean(briefBreakdown.trim());
+  const hasVariableSelection = selectedVariableModules.length > 0;
+  const missingInputs = missingMarketingInputs(briefForm, hasBriefBreakdown, fixedDoneCount, selectedVariableModules.length, linkedResources.length);
+  const generationStatus = [
+    isRunningBrief && "正在拆解 Brief",
+    isRunningFixedModule && `正在分析${selectedFixedModule.title}`,
+    isRunningVariableModule && "正在分析可变模块",
+    isRunningFinalReport && "正在整理完整报告",
+  ].find(Boolean) || (finalReport ? "报告已生成，可导出或复用" : hasBriefBreakdown ? "可继续生成下一步" : "等待输入 Brief");
+  const flowSteps: FlowStep[] = [
+    {
+      key: "brief",
+      title: "Brief拆解",
+      status: hasBriefBreakdown ? "已完成" : hasBriefInput ? "可继续生成" : "缺资料",
+      detail: hasBriefBreakdown ? "核心需求、隐性需求、优先级和约束已生成。" : hasBriefInput ? "Brief 已进入工作台，可点击 AI 拆解。" : "请上传 Brief 或粘贴客户沟通记录。",
+      transfer: hasBriefBreakdown ? "结果已自动进入固定模块、可变模块和最终报告。" : "生成后会自动带入后续步骤。",
+    },
+    {
+      key: "fixed",
+      title: "固定分析模块",
+      status: fixedDoneCount === fixedResearchModules.length ? "已完成" : hasBriefBreakdown ? "可继续生成" : "缺资料",
+      detail: fixedDoneCount ? `已完成 ${fixedDoneCount}/${fixedResearchModules.length} 个固定模块。` : hasBriefBreakdown ? "已接收 Brief 拆解，可开始逐模块深度分析。" : "等待上一步 Brief 拆解结果。",
+      transfer: fixedDoneCount ? "固定模块结论已自动进入可变模块和报告。" : "生成后会作为可变模块与报告依据。",
+    },
+    {
+      key: "variable",
+      title: "可选分析模块",
+      status: variableDoneCount > 0 ? "已完成" : hasBriefBreakdown && hasVariableSelection ? "可继续生成" : "缺资料",
+      detail: variableDoneCount ? `已生成 ${variableDoneCount} 组增补分析。` : hasBriefBreakdown && hasVariableSelection ? `已选择 ${selectedVariableModules.length} 个额外场景，可生成分析。` : hasBriefBreakdown ? "请根据客户目标选择额外深挖场景。" : "等待 Brief 拆解后再选择额外模块。",
+      transfer: variableDoneCount ? "可变模块结论已自动进入最终报告。" : "生成后会补充到最终报告。",
+    },
+    {
+      key: "report",
+      title: "完整调研报告",
+      status: finalReport.trim() ? "已完成" : hasBriefBreakdown && fixedDoneCount > 0 ? "可继续生成" : "缺资料",
+      detail: finalReport.trim() ? "完整营销调研报告已生成。" : hasBriefBreakdown && fixedDoneCount > 0 ? "已接收前序结果，可整理成报告。" : "至少需要 Brief 拆解和固定模块结论。",
+      transfer: finalReport.trim() ? "可作为后续方案、PPT 和讲稿输入。" : "生成后输出统一调研报告。",
+    },
+  ];
 
-  const archiveMatches = useMemo(() => {
-    const focus = normalizeForMatch(projectFocus);
-    if (!focus) return archiveSeed;
-    return archiveSeed
-      .map((item) => ({
-        item,
-        score: [item.type, item.scene, item.node, item.highlight.join(" "), item.reusable.join(" "), item.adaptation.join(" ")]
-          .join(" ")
-          .split(/\s+/)
-          .reduce((total, token) => (focus.includes(normalizeForMatch(token)) ? total + 1 : total), 0),
-      }))
-      .sort((left, right) => right.score - left.score)
-      .map((entry) => entry.item);
-  }, [projectFocus]);
-
-  const briefSummary = useMemo(() => {
-    if (!briefOutput) return "还没有读取到本次 Brief，点击下方按钮后会先按当前项目重点生成一版调研报告。";
-    return summarize(briefOutput);
-  }, [briefOutput]);
-
-  const generateResearchReport = () => {
-    const report = buildMarketingResearchReport({
-      briefOutput,
-      projectFocus,
-      resources,
-      selectedUser,
-      selectedCompetitor,
-      selectedHotspot,
-      selectedArchive,
+  const addBriefFiles = (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setSelectedFiles((current) => {
+      const next = [...current];
+      Array.from(fileList).forEach((file) => {
+        const exists = next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+        if (!exists) next.push(file);
+      });
+      return next;
     });
-    setReportOutput(report);
-    addJob("营销调研报告", report.title, "营销调研");
+    setFileMessage("已加入文件，点击解析文件后会读取正文。");
+  };
+
+  const removeBriefFile = (index: number) => {
+    setSelectedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+  };
+
+  const toggleLinkedResource = (resourceId: number) => {
+    setLinkedResourceIds((current) => current.includes(resourceId) ? current.filter((id) => id !== resourceId) : [...current, resourceId]);
+  };
+
+  const linkRecommendedResources = () => {
+    setLinkedResourceIds((current) => Array.from(new Set([...current, ...recommendedResources.map((resource) => resource.id)])));
+  };
+
+  const exportFinalReport = () => {
+    downloadMarkdown(`营销调研报告-${briefForm.projectName || briefForm.gameName || today()}.md`, "营销调研报告", finalReport);
+  };
+
+  const reuseReportForScript = () => {
+    if (!finalReport.trim()) return;
+    downloadMarkdown(`讲稿输入素材-${briefForm.projectName || briefForm.gameName || today()}.md`, "讲稿输入素材", `以下内容可在“讲稿输出”中作为方案核心素材引用：\n\n${finalReport}`);
+  };
+
+  const parseMarketingBriefFiles = async () => {
+    if (!selectedFiles.length) {
+      setFileMessage("请先选择客户 Brief、QA 或补充资料文件。");
+      return parsedFiles;
+    }
+    setIsParsingFiles(true);
+    setFileMessage("");
+    try {
+      const body = new FormData();
+      selectedFiles.forEach((file) => body.append("files", file));
+      const response = await fetch("/api/brief-files", { method: "POST", body });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Brief 文件解析失败。");
+      const files = (result.files ?? []).map((item: Partial<BriefInputFile & Resource>) => ({
+        id: item.id ?? Date.now(),
+        name: item.name ?? item.fileName ?? item.title ?? "Brief 输入文件",
+        fileSize: item.fileSize,
+        mimeType: item.mimeType,
+        parseStatus: item.parseStatus === "失败" ? "失败" : "成功",
+        parseError: item.parseError,
+        summary: item.summary ?? summarize(item.content ?? ""),
+        content: item.content ?? "",
+        structuredContent: item.structuredContent,
+      })) as BriefInputFile[];
+      setParsedFiles(files);
+      const parsedText = files.map((file) => `${file.name}\n${file.summary}\n${file.content}`).join("\n");
+      setBriefForm((current) => ({
+        ...current,
+        projectName: current.projectName || inferBriefFieldFromText(parsedText, "projectName"),
+        gameName: current.gameName || inferBriefFieldFromText(parsedText, "gameName"),
+        projectType: current.projectType || inferBriefFieldFromText(parsedText, "projectType") || current.projectType,
+        marketingGoal: current.marketingGoal || inferBriefFieldFromText(parsedText, "marketingGoal"),
+      }));
+      setFileMessage(`已解析 ${files.length} 个输入文件。`);
+      addJob("Brief 文件解析", `解析 ${files.length} 个营销调研 Brief 文件`, "营销调研");
+      return files;
+    } catch (error) {
+      setFileMessage(error instanceof Error ? error.message : "Brief 文件解析失败。");
+      return parsedFiles;
+    } finally {
+      setIsParsingFiles(false);
+    }
+  };
+
+  const runBriefBreakdown = async () => {
+    setIsRunningBrief(true);
+    try {
+      const inputFiles = selectedFiles.length && !parsedFiles.length ? await parseMarketingBriefFiles() : parsedFiles;
+      const combinedFiles = [...inputFiles, ...linkedResourceFiles];
+      const inputPackage = buildMarketingBriefInputPackage(briefForm, combinedFiles);
+      const prompt = buildMarketingBriefPrompt(inputPackage);
+      if (apiConfig.endpoint.trim()) {
+        setBriefBreakdown("正在调用 AI 拆解 Brief...");
+        const response = await fetch("/api/brief-run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: apiConfig.endpoint.trim(),
+            apiKey: apiConfig.apiKey.trim(),
+            model: apiConfig.model.trim() || undefined,
+            input: { ...briefForm, files: combinedFiles.map((file) => ({ name: file.name, summary: file.summary, content: file.content })), linkedResources },
+            prompt,
+            messages: [
+              { role: "system", content: "你是资深游戏营销前期调研负责人，擅长从客户 Brief 中拆解显性需求、隐性需求、优先级、约束条件和后续调研路径。" },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || result.error || "Brief 拆解 API 调用失败。");
+        const output = extractAiText(result);
+        setBriefBreakdown(output || JSON.stringify(result, null, 2));
+        const outputText = output || JSON.stringify(result, null, 2);
+        setBriefForm((current) => ({
+          ...current,
+          projectName: current.projectName || inferBriefFieldFromText(outputText, "projectName"),
+          gameName: current.gameName || inferBriefFieldFromText(outputText, "gameName"),
+          projectType: current.projectType || inferBriefFieldFromText(outputText, "projectType") || current.projectType,
+          marketingGoal: current.marketingGoal || inferBriefFieldFromText(outputText, "marketingGoal"),
+        }));
+        addJob("Brief 拆解", `${briefForm.projectName || "未命名项目"} 营销调研 Brief 拆解`, "营销调研");
+        return;
+      }
+      const localOutput = buildLocalMarketingBriefBreakdown(briefForm, combinedFiles);
+      setBriefBreakdown(localOutput);
+      setBriefForm((current) => ({
+        ...current,
+        projectName: current.projectName || inferBriefFieldFromText(localOutput, "projectName"),
+        gameName: current.gameName || inferBriefFieldFromText(localOutput, "gameName"),
+        projectType: current.projectType || inferBriefFieldFromText(localOutput, "projectType") || current.projectType,
+        marketingGoal: current.marketingGoal || inferBriefFieldFromText(localOutput, "marketingGoal"),
+      }));
+      addJob("Brief 拆解", `${briefForm.projectName || "未命名项目"} 本地营销 Brief 拆解`, "营销调研");
+    } catch (error) {
+      setBriefBreakdown(error instanceof Error ? error.message : "Brief 拆解失败。");
+    } finally {
+      setIsRunningBrief(false);
+    }
+  };
+
+  const runFixedModuleAnalysis = async () => {
+    setIsRunningFixedModule(true);
+    try {
+      const prompt = `${buildFixedModuleAnalysisPrompt(selectedFixedModule, briefBreakdown, briefForm)}
+
+资料库引用：
+${linkedResourceContext}`;
+      if (apiConfig.endpoint.trim()) {
+        setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: `正在生成${selectedFixedModule.title}分析...` }));
+        const response = await fetch("/api/marketing-research-run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: apiConfig.endpoint.trim(),
+            apiKey: apiConfig.apiKey.trim(),
+            model: apiConfig.model.trim() || undefined,
+            input: { module: selectedFixedModule.title, briefBreakdown, briefForm, linkedResources },
+            prompt,
+            messages: [
+              { role: "system", content: "你是资深游戏营销前期调研专家，正在基于 Brief 拆解结果生成固定调研模块的深度分析。" },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || result.error || `${selectedFixedModule.title}分析失败。`);
+        const output = extractAiText(result);
+        setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: output || JSON.stringify(result, null, 2) }));
+      } else {
+        const localAnalysis = `${buildLocalFixedModuleAnalysis(selectedFixedModule, briefBreakdown, briefForm)}
+
+资料库参考：
+${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title}：${resource.summary}`).join("\n") : "- 暂未关联资料库文件。"}`;
+        setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: localAnalysis }));
+      }
+      addJob("固定模块分析", `${briefForm.projectName || "未命名项目"} ${selectedFixedModule.title}`, "营销调研");
+    } catch (error) {
+      setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: error instanceof Error ? error.message : `${selectedFixedModule.title}分析失败。` }));
+    } finally {
+      setIsRunningFixedModule(false);
+    }
+  };
+
+  const toggleVariableScene = (scene: string) => {
+    setSelectedVariableScenes((current) => current.includes(scene) ? current.filter((item) => item !== scene) : [...current, scene]);
+  };
+
+  const runVariableModuleAnalysis = async () => {
+    if (!selectedVariableModules.length) {
+      setVariableModuleOutputs((current) => ({ ...current, _message: "请先选择至少一个需要增补拆解的可变模块。" }));
+      return;
+    }
+    setIsRunningVariableModule(true);
+    try {
+      const prompt = `${buildVariableModuleAnalysisPrompt(selectedVariableModules, briefBreakdown, fixedModuleOutputs, briefForm)}
+
+资料库引用：
+${linkedResourceContext}`;
+      if (apiConfig.endpoint.trim()) {
+        setVariableModuleOutputs((current) => ({ ...current, _message: "正在生成可变模块分析..." }));
+        const response = await fetch("/api/marketing-research-run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: apiConfig.endpoint.trim(),
+            apiKey: apiConfig.apiKey.trim(),
+            model: apiConfig.model.trim() || undefined,
+            input: { modules: selectedVariableModules, briefBreakdown, fixedModuleOutputs, briefForm, linkedResources },
+            prompt,
+            messages: [
+              { role: "system", content: "你是资深游戏营销调研专家，正在基于 Brief 和固定模块结果生成可变增补模块分析。" },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || result.error || "可变模块分析失败。");
+        const output = extractAiText(result);
+        setVariableModuleOutputs((current) => ({
+          ...current,
+          _message: "",
+          [selectedVariableModules.map((item) => item.scene).join(" + ")]: output || JSON.stringify(result, null, 2),
+        }));
+      } else {
+        const localOutput = selectedVariableModules.map((scenario) => `【${scenario.scene}】
+适配判断：基于当前 Brief 拆解，建议围绕该场景补充验证，避免只用固定模块结论直接进入策略。
+增补模块：${scenario.modules.join(" / ")}
+关键问题：
+${scenario.questions.map((item) => `- ${item}`).join("\n")}
+建议打法：先补用户接受度、风险雷点和历史案例，再决定是否进入方案主线。
+标准输出：${scenario.output}
+需补充数据：用户评论、竞品案例、客户资源限制、预算和时间节点。`).join("\n\n");
+        setVariableModuleOutputs((current) => ({
+          ...current,
+          _message: "",
+          [selectedVariableModules.map((item) => item.scene).join(" + ")]: localOutput,
+        }));
+      }
+      addJob("可变模块分析", selectedVariableModules.map((item) => item.scene).join(" + "), "营销调研");
+    } catch (error) {
+      setVariableModuleOutputs((current) => ({ ...current, _message: error instanceof Error ? error.message : "可变模块分析失败。" }));
+    } finally {
+      setIsRunningVariableModule(false);
+    }
+  };
+
+  const runFinalReport = async () => {
+    setIsRunningFinalReport(true);
+    try {
+      const prompt = `${buildFinalMarketingResearchReportPrompt({ briefContext: briefBreakdown, fixedOutputs: fixedModuleOutputs, variableOutputs: variableModuleOutputs, form: briefForm })}
+
+资料库引用：
+${linkedResourceContext}`;
+      if (apiConfig.endpoint.trim()) {
+        setFinalReport("正在整合完整营销调研报告...");
+        const response = await fetch("/api/marketing-research-run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: apiConfig.endpoint.trim(),
+            apiKey: apiConfig.apiKey.trim(),
+            model: apiConfig.model.trim() || undefined,
+            input: { briefBreakdown, fixedModuleOutputs, variableModuleOutputs, briefForm, linkedResources },
+            prompt,
+            messages: [
+              { role: "system", content: "你是资深游戏营销调研负责人，正在整合完整前期调研报告。" },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || result.error || "完整调研报告生成失败。");
+        const output = extractAiText(result);
+        setFinalReport(output || JSON.stringify(result, null, 2));
+      } else {
+        setFinalReport(`一、项目需求总览
+${briefBreakdown ? summarize(briefBreakdown) : "尚未生成 Brief 拆解，建议先完成第一步。"}
+
+二、固定模块结论
+${Object.entries(fixedModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${summarize(output)}`).join("\n\n") || "尚未生成固定模块分析。"}
+
+三、可变模块结论
+${Object.entries(variableModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${summarize(output)}`).join("\n\n") || "尚未生成可变模块分析。"}
+
+四、营销机会与风险
+- 机会：围绕 Brief 中的核心需求，把用户动机、产品卖点、社群文化和竞品差异串成主线。
+- 风险：缺少预算、节点、素材授权或社群敏感点证据时，不建议直接进入执行方案。
+
+五、待补充数据与客户确认 QA
+- 请确认 KPI、预算区间、时间节点、素材授权、竞品范围、合规限制和最终交付格式。
+
+六、资料库引用
+${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title}（${resource.type}）：${resource.summary}`).join("\n") : "- 暂未关联资料库文件。"}`);
+      }
+      addJob("营销调研报告", `${briefForm.projectName || "未命名项目"} 完整营销调研报告`, "营销调研");
+    } catch (error) {
+      setFinalReport(error instanceof Error ? error.message : "完整调研报告生成失败。");
+    } finally {
+      setIsRunningFinalReport(false);
+    }
   };
 
   return (
     <section className="page">
-      <PageTitle title="营销调研" subtitle="把用户洞察、竞品、热点、舆情和过往营销内容放到一个独立工作台里。" />
-      <div className="metric-grid">
-        <Metric label="用户分层" value={userInsightSeed.length} tone="blue" />
-        <Metric label="追踪竞品" value={competitorSeed.length} tone="orange" />
-        <Metric label="可用热点" value={hotspotSeed.length} tone="green" />
-        <Metric label="负面预警" value={sentimentSeed.filter((item) => item.severity === "高").length} tone="red" />
-      </div>
+      <PageTitle title="营销调研" subtitle="游戏营销前期调研标准化框架：固定模块统一基础认知，可变模块按 Brief 场景增补。" />
 
-      <Card title="调研任务设定">
-        <div className="form-grid">
-          <Field label="当前项目重点" value={projectFocus} onChange={setProjectFocus} />
-          <label>
-            <span>资料库参考量</span>
-            <div className="soft-pill">{resources.length} 份资料可用于调研辅助</div>
-          </label>
-        </div>
-        <div className="note-box">
-          <strong>本次 Brief 摘要</strong>
-          <p>{briefSummary}</p>
-        </div>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
-          <button className="primary-button" onClick={generateResearchReport}>一键生成营销调研报告</button>
-          {reportOutput && <button className="ghost-button" onClick={() => setReportOutput(null)}>清空当前报告</button>}
-        </div>
-        <div className="note-box">
-          <strong>使用方式</strong>
-          <p>先明确本次项目目标，再切到对应模块快速提取可用洞察。每个模块都给你“结论 + 风险/不足 + 可落地建议”，方便直接往方案里搬。</p>
-        </div>
-      </Card>
+      <WorkbenchAssistStrip status={generationStatus} missingItems={missingInputs} />
 
-      <Card title="营销调研报告">
-        {reportOutput ? (
-          <div className="research-report-shell">
-            <div className="research-report-hero">
-              <div>
-                <p className="research-report-kicker">可直接用于方案整理</p>
-                <h3>{reportOutput.title}</h3>
-                <p className="muted">{reportOutput.generatedNote}</p>
-              </div>
-              <div className="tag-row research-report-tags">
-                <span>{reportOutput.projectType}</span>
-                <span>{reportOutput.usage}</span>
-                <span>{reportOutput.projectFocus}</span>
-              </div>
-            </div>
-            <div className="research-grid research-report-grid">
-              {reportOutput.sections.map((section) => (
-                <div key={section.id} className={`research-block research-report-block tone-${section.id}`}>
-                  <div className="research-report-block-head">
-                    <span className="research-report-chip">{section.title}</span>
-                    <h3>{section.title}</h3>
-                  </div>
-                  <p className="research-report-summary">{section.summary}</p>
-                  <ul className="template-list research-report-list">
-                    {section.bullets.map((item) => <li key={item}>{item}</li>)}
-                  </ul>
-                </div>
-              ))}
-            </div>
-            <div className="note-box research-report-final" style={{ marginTop: 16 }}>
-              <strong>最终营销方向</strong>
-              <ul className="template-list research-report-list">
-                {reportOutput.finalDirection.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
-          </div>
-        ) : (
-          <div className="empty-state compact">点击上方“一键生成营销调研报告”后，这里会输出一份结合本次 Brief 的完整调研结论。</div>
-        )}
-      </Card>
+      <ResearchFlowStatus steps={flowSteps} activeTab={tab} setTab={setTab} />
 
-      <div className="tabs research-tabs">
-        <button className={`tab ${tab === "user" ? "active" : ""}`} onClick={() => setTab("user")}>目标用户洞察</button>
-        <button className={`tab ${tab === "competitor" ? "active" : ""}`} onClick={() => setTab("competitor")}>竞品分析</button>
-        <button className={`tab ${tab === "hotspot" ? "active" : ""}`} onClick={() => setTab("hotspot")}>热点对齐</button>
-        <button className={`tab ${tab === "sentiment" ? "active" : ""}`} onClick={() => setTab("sentiment")}>舆情分析</button>
-        <button className={`tab ${tab === "archive" ? "active" : ""}`} onClick={() => setTab("archive")}>往期营销内容</button>
-      </div>
-
-      {tab === "user" && selectedUser && (
-        <div className="split-panel large-left">
-          <Card title="用户分层库">
-            <div className="research-list">
-              {userInsightSeed.map((item) => (
-                <button
-                  key={item.id}
-                  className={selectedUserId === item.id ? "research-item active" : "research-item"}
-                  onClick={() => setSelectedUserId(item.id)}
-                >
-                  <strong>{item.label}</strong>
-                  <span>{item.segmentType} · {item.activeHours}</span>
-                </button>
-              ))}
-            </div>
-          </Card>
-          <Card title="目标用户洞察报告">
-            <div className="tag-row">
-              <span>{selectedUser.segmentType}</span>
-              <span>{selectedUser.age}</span>
-              <span>{selectedUser.region}</span>
-            </div>
-            <p className="muted">{buildUserInsightSummary(selectedUser, projectFocus)}</p>
-            <div className="research-grid">
-              <div className="research-block">
-                <h3>用户画像</h3>
-                <ul className="template-list">
-                  <li>性别：{selectedUser.gender}</li>
-                  <li>兴趣：{selectedUser.interests.join("、")}</li>
-                  <li>游戏习惯：{selectedUser.habits.join("、")}</li>
-                  <li>消费观念：{selectedUser.spendingMindset}</li>
-                  <li>活跃时段：{selectedUser.activeHours}</li>
-                  <li>付费场景：{selectedUser.paymentScenes.join("、")}</li>
-                  <li>留存周期：{selectedUser.retentionCycle}</li>
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>用户需求分析</h3>
-                <strong>核心需求</strong>
-                <div className="tag-row">{selectedUser.needs.map((item) => <span key={item}>{item}</span>)}</div>
-                <strong>痛点</strong>
-                <div className="tag-row">{selectedUser.painPoints.map((item) => <span key={item}>{item}</span>)}</div>
-                <strong>未被满足的需求</strong>
-                <ul className="template-list">
-                  {selectedUser.unmetNeeds.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>偏好趋势与营销建议</h3>
-                <p className="muted">{selectedUser.trend}</p>
-                <ul className="template-list">
-                  {selectedUser.marketingAdvice.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>调研结论总结</h3>
-                <p className="muted">针对 {selectedUser.label}，营销内容要同时回应 {selectedUser.needs.slice(0, 2).join("、")}，并控制 {selectedUser.painPoints.slice(0, 2).join("、")} 带来的负面联想。</p>
-                <p className="muted">核心用户与潜在用户差异：
-                  {selectedUser.segmentType === "核心用户"
-                    ? "核心用户更看重竞技强度、公平体验和社交荣誉；潜在用户更吃角色、内容氛围和低门槛表达。"
-                    : "潜在用户需要先被内容种草，再被玩法说服；核心用户则更在意长期留存和公平感。"}
-                </p>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {tab === "competitor" && selectedCompetitor && (
-        <div className="split-panel large-left">
-          <Card title="竞品清单">
-            <div className="research-list">
-              {competitorSeed.map((item) => (
-                <button
-                  key={item.id}
-                  className={selectedCompetitorId === item.id ? "research-item active" : "research-item"}
-                  onClick={() => setSelectedCompetitorId(item.id)}
-                >
-                  <strong>{item.name}</strong>
-                  <span>{item.stage}</span>
-                </button>
-              ))}
-            </div>
-          </Card>
-          <Card title="竞品营销报告">
-            <p className="muted">{buildCompetitorGap(selectedCompetitor, projectFocus)}</p>
-            <div className="research-grid">
-              <div className="research-block">
-                <h3>竞品营销动作</h3>
-                <div className="timeline-list">
-                  {selectedCompetitor.keyActions.map((item) => (
-                    <div key={`${item.node}-${item.action}`} className="timeline-item">
-                      <strong>{item.node}</strong>
-                      <p>{item.action}</p>
-                      <span>{item.effect}</span>
+      {tab === "brief" && (
+        <div className="brief-workbench">
+          <Card title="上传 / 输入 Brief">
+            <div className="brief-file-panel">
+              <label className="upload-zone compact-upload">
+                <strong>上传客户 Brief</strong>
+                <span>支持 Brief、QA、补充资料、Word、PDF、TXT、Excel</span>
+                <input type="file" multiple onChange={(event) => addBriefFiles(event.target.files)} />
+                <em>{selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件` : "点击选择文件"}</em>
+              </label>
+              {selectedFiles.length > 0 && (
+                <div className="file-list">
+                  {selectedFiles.map((file, index) => (
+                    <div className="file-item" key={`${file.name}-${file.size}-${file.lastModified}`}>
+                      <span>{file.name}</span>
+                      <button className="link-button danger" onClick={() => removeBriefFile(index)}>移除</button>
                     </div>
                   ))}
                 </div>
+              )}
+              <div className="inline-actions">
+                <button className="ghost-button" onClick={parseMarketingBriefFiles} disabled={isParsingFiles}>{isParsingFiles ? "解析中..." : "解析文件"}</button>
+                {fileMessage && <span>{fileMessage}</span>}
               </div>
-              <div className="research-block">
-                <h3>优劣势分析</h3>
-                <strong>优势</strong>
-                <ul className="template-list">
-                  {selectedCompetitor.strengths.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-                <strong>劣势</strong>
-                <ul className="template-list">
-                  {selectedCompetitor.weaknesses.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>用户口碑分析</h3>
-                <strong>正面评价</strong>
-                <div className="tag-row">{selectedCompetitor.userPraise.map((item) => <span key={item}>{item}</span>)}</div>
-                <strong>负面评价</strong>
-                <div className="tag-row">{selectedCompetitor.userComplaints.map((item) => <span key={item}>{item}</span>)}</div>
-              </div>
-              <div className="research-block">
-                <h3>趋势预判与应对</h3>
-                <p className="muted">{selectedCompetitor.likelyNextMove}</p>
-                <ul className="template-list">
-                  {selectedCompetitor.counterAdvice.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
+              {parsedFiles.length > 0 && (
+                <div className="brief-input-list">
+                  {parsedFiles.map((file) => (
+                    <div className="brief-input-card" key={file.id}>
+                      <strong>{classifyBriefFile(file.name, file.content)}</strong>
+                      <span>{file.name} / {formatFileSize(file.fileSize)} / {file.parseStatus}</span>
+                      <p>{file.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
+            <ResourceLinkPicker
+              title="关联资料库"
+              resources={resources}
+              selectedIds={linkedResourceIds}
+              onToggle={toggleLinkedResource}
+              hint="可选择历史方案、竞品资料、复盘报告、QA 或已沉淀 Brief；AI 会自动带入后续拆解、固定模块、可变模块和最终报告。"
+            />
+            <RecommendedResources resources={recommendedResources} onAddAll={linkRecommendedResources} />
+            <textarea value={briefForm.forbidden} onChange={(event) => setBriefForm({ ...briefForm, forbidden: event.target.value })} placeholder="约束 / 禁忌：预算限制、时间限制、品牌红线、不可触碰话题、素材限制等。" />
+            <textarea value={briefForm.brief} onChange={(event) => setBriefForm({ ...briefForm, brief: event.target.value })} placeholder="粘贴 Brief 正文、客户沟通记录、会议纪要或补充说明。" />
+            <GlobalAiConfigNotice apiConfig={apiConfig} />
+            <button className="primary-button wide" onClick={runBriefBreakdown} disabled={isRunningBrief}>{isRunningBrief ? "拆解中..." : "AI 拆解 Brief"}</button>
+          </Card>
+          <Card title="Brief 拆解结果">
+            <div className="auto-brief-fields">
+              <Info label="项目名称" value={extractedBriefInfo.projectName || "待 AI 提取"} />
+              <Info label="游戏名称" value={extractedBriefInfo.gameName || "待 AI 提取"} />
+              <Info label="项目类型" value={extractedBriefInfo.projectType || "待 AI 提取"} />
+              <Info label="营销目标 / 场景" value={extractedBriefInfo.marketingGoal || "待 AI 提取"} />
+            </div>
+            <div className="brief-output-guide">
+              <span>核心需求</span>
+              <span>次要需求</span>
+              <span>隐性需求</span>
+              <span>优先级</span>
+              <span>约束条件</span>
+            </div>
+            <pre className="ai-output">{briefBreakdown || "上传或粘贴 Brief 后，点击“AI 拆解 Brief”。这里会输出核心需求、次要需求、隐性需求、需求优先级、预算/时间/资源/合规约束，以及下一步调研执行清单。"}</pre>
           </Card>
         </div>
       )}
 
-      {tab === "hotspot" && selectedHotspot && (
-        <div className="split-panel large-left">
-          <Card title="热点池">
+      {tab === "fixed" && (
+        <div className="fixed-module-workbench">
+          <Card title="Brief 提取上下文">
+            <FlowTransferNotice
+              status={hasBriefBreakdown ? "已完成" : "缺资料"}
+              title={hasBriefBreakdown ? "已自动接收拆 Brief 结果" : "还没有可接收的 Brief 拆解"}
+              detail={hasBriefBreakdown ? "本页生成固定模块时，会直接使用第一步输出的核心需求、隐性需求、优先级、约束条件和项目基础信息。" : "先回到“拆 Brief”上传或粘贴客户材料，并生成需求拆解。"}
+            />
+            <div className="brief-context-box">
+              <strong>{briefForm.projectName || "未命名项目"} / {briefForm.gameName || "未填写游戏"}</strong>
+              <span>{briefForm.projectType}</span>
+              <p>{briefForm.marketingGoal || "尚未填写营销目标/场景。"}</p>
+            </div>
+            <div className="note-box">
+              <strong>上一步拆解结果</strong>
+              <p>{briefBreakdown ? summarize(briefBreakdown) : "还没有 Brief 拆解结果。建议先在“拆 Brief”页生成，再进入固定模块深度分析。"}</p>
+            </div>
+            <LinkedResourceSummary resources={linkedResources} />
             <div className="research-list">
-              {hotspotSeed.map((item) => (
+              {fixedResearchModules.map((module, index) => (
                 <button
-                  key={item.id}
-                  className={selectedHotspotId === item.id ? "research-item active" : "research-item"}
-                  onClick={() => setSelectedHotspotId(item.id)}
+                  key={module.title}
+                  className={activeFixedModule === module.title ? "research-item active" : "research-item"}
+                  onClick={() => setActiveFixedModule(module.title)}
                 >
-                  <strong>{item.title}</strong>
-                  <span>{item.category} · {item.duration}</span>
+                  <strong>{index + 1}. {module.title}</strong>
+                  <span>{module.output}</span>
                 </button>
               ))}
             </div>
           </Card>
-          <Card title="热点对齐工作台">
-            <div className="tag-row">
-              <span>{selectedHotspot.category}</span>
-              <span>{selectedHotspot.heat}</span>
-              <span>{selectedHotspot.fitScene}</span>
-            </div>
-            <p className="muted">{buildHotspotSummary(selectedHotspot, projectFocus)}</p>
-            <div className="research-grid">
-              <div className="research-block">
-                <h3>热点筛选匹配</h3>
-                <p className="muted">适配游戏类型：{selectedHotspot.fitGames.join("、")}</p>
-                <p className="muted">持续时间：{selectedHotspot.duration}</p>
-                <p className="muted">建议使用场景：{selectedHotspot.fitScene}</p>
-              </div>
-              <div className="research-block">
-                <h3>热点灵感库</h3>
-                <div className="timeline-list">
-                  {selectedHotspot.ideas.map((item) => (
-                    <div key={item.title} className="timeline-item">
-                      <strong>{item.title}</strong>
-                      <p>{item.execution}</p>
-                      <span>{item.expected}</span>
-                    </div>
-                  ))}
+          <Card
+            title={`${selectedFixedModule.title}深度分析`}
+            action={<button className="primary-button" onClick={runFixedModuleAnalysis} disabled={isRunningFixedModule}>{isRunningFixedModule ? "分析中..." : "AI 深度分析"}</button>}
+          >
+            <p className="muted">{selectedFixedModule.goal}</p>
+            <div className="research-grid practical-grid">
+              {selectedFixedModule.checklist.map((item) => (
+                <div className="research-block practical-block" key={item}>
+                  <h3>{item.split("（")[0]}</h3>
+                  <p>{item}</p>
                 </div>
-              </div>
-              <div className="research-block">
-                <h3>素材库</h3>
-                <strong>文案 / 图片思路</strong>
-                <ul className="template-list">
-                  {selectedHotspot.copyAssets.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-                <strong>短视频脚本框架</strong>
-                <ul className="template-list">
-                  {selectedHotspot.scriptIdeas.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>热点风险提示</h3>
-                <ul className="template-list">
-                  {selectedHotspot.risks.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
+              ))}
             </div>
+            <div className="note-box">
+              <strong>本模块会自动使用</strong>
+              <p>第一步拆 Brief 的核心需求、次要需求、隐性需求、优先级、预算/时间/资源/合规约束，并结合当前项目基础信息生成分析。</p>
+            </div>
+            <pre className="ai-output compact">{selectedFixedOutput || `点击“AI 深度分析”后，这里会生成${selectedFixedModule.title}的本次项目分析结论、逐项判断、方案可用内容和补数清单。`}</pre>
           </Card>
         </div>
       )}
 
-      {tab === "sentiment" && (
-        <div className="split-panel large-left">
-          <Card title="舆情预警池">
+      {tab === "variable" && (
+        <div className="variable-layout">
+          <Card title="客户选择额外模块">
+            <FlowTransferNotice
+              status={hasBriefBreakdown ? (hasVariableSelection ? "可继续生成" : "缺资料") : "缺资料"}
+              title={hasBriefBreakdown ? "Brief 拆解已带入本页" : "等待 Brief 拆解"}
+              detail={hasBriefBreakdown ? "客户在这里选择需要额外深挖的场景，AI 会结合 Brief 与固定模块结论生成可变模块分析。" : "先完成拆 Brief，本页才有明确的选择依据。"}
+            />
+            <div className="note-box">
+              <strong>系统会参考 Brief 拆解</strong>
+              <p>{briefBreakdown ? summarize(briefBreakdown) : "请先完成拆 Brief。下方可由客户选择本次需要额外深挖的营销场景。"}</p>
+            </div>
+            <LinkedResourceSummary resources={linkedResources} />
             <div className="research-list">
-              {sentimentSeed.map((item) => (
-                <div key={item.id} className="research-item static">
-                  <strong>{item.topic}</strong>
-                  <span>风险等级：{item.severity} · {item.impact}</span>
-                </div>
+              {variableResearchScenarios.map((scenario) => (
+                <button
+                  key={scenario.scene}
+                  className={selectedVariableScenes.includes(scenario.scene) ? "research-item active" : "research-item"}
+                  onClick={() => toggleVariableScene(scenario.scene)}
+                >
+                  <strong>{scenario.scene}</strong>
+                  <span>{scenario.output}</span>
+                </button>
               ))}
             </div>
           </Card>
-          <Card title="舆情分析与建议">
-            <div className="research-grid">
-              {sentimentSeed.map((item) => (
-                <div key={item.id} className="research-block">
-                  <div className="tag-row">
-                    <span>{item.severity === "高" ? "高优先级预警" : item.severity === "中" ? "中优先级观察" : "低优先级跟踪"}</span>
-                  </div>
-                  <h3>{item.topic}</h3>
-                  <p className="muted">触发原因：{item.trigger}</p>
-                  <p className="muted">影响范围：{item.impact}</p>
-                  <div className="note-box compact-note">
-                    <strong>官方回应模板</strong>
-                    <p>{item.responseTemplate}</p>
-                  </div>
-                  <strong>周期总结</strong>
-                  <p className="muted">{item.weeklySummary}</p>
+          <Card
+            title="可变模块深度分析"
+            action={<button className="primary-button" onClick={runVariableModuleAnalysis} disabled={isRunningVariableModule}>{isRunningVariableModule ? "分析中..." : "AI 分析所选模块"}</button>}
+          >
+            <div className="tag-row">
+              {selectedVariableModules.length ? selectedVariableModules.map((scenario) => <span key={scenario.scene}>{scenario.scene}</span>) : <span>尚未选择额外模块</span>}
+            </div>
+            <div className="research-grid practical-grid">
+              {selectedVariableModules.map((scenario) => (
+                <div className="research-block practical-block" key={scenario.scene}>
+                  <h3>{scenario.scene}</h3>
+                  <div className="tag-row">{scenario.modules.map((item) => <span key={item}>{item}</span>)}</div>
                   <ul className="template-list">
-                    {item.monthlyAdvice.map((advice) => <li key={advice}>{advice}</li>)}
+                    {scenario.questions.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
                   </ul>
                 </div>
               ))}
             </div>
+            <pre className="ai-output compact">
+              {variableModuleOutputs._message || Object.entries(variableModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${output}`).join("\n\n") || "选择客户需要的额外模块后，点击“AI 分析所选模块”。这里会基于 Brief 拆解和固定模块结果生成场景增补分析。"}
+            </pre>
           </Card>
         </div>
       )}
 
-      {tab === "archive" && selectedArchive && (
-        <div className="split-panel large-left">
-          <Card title="过往内容库">
-            <div className="research-list">
-              {archiveMatches.map((item) => (
-                <button
-                  key={item.id}
-                  className={selectedArchiveId === item.id ? "research-item active" : "research-item"}
-                  onClick={() => setSelectedArchiveId(item.id)}
-                >
-                  <strong>{item.title}</strong>
-                  <span>{item.type} · {item.scene} · {item.node}</span>
-                </button>
-              ))}
+      {tab === "report" && (
+        <Card
+          title="完整营销调研报告"
+          action={(
+            <div className="inline-actions">
+              <button className="ghost-button" onClick={exportFinalReport} disabled={!finalReport}>导出报告</button>
+              <button className="ghost-button" onClick={reuseReportForScript} disabled={!finalReport}>复用到讲稿</button>
+              <button className="primary-button" onClick={runFinalReport} disabled={isRunningFinalReport}>{isRunningFinalReport ? "整理中..." : "生成完整报告"}</button>
             </div>
-          </Card>
-          <Card title="往期营销内容分析">
-            <p className="muted">{buildArchiveSummary(selectedArchive, projectFocus)}</p>
-            <div className="research-grid">
-              <div className="research-block">
-                <h3>过往内容分类整理</h3>
-                <div className="tag-row">
-                  <span>{selectedArchive.type}</span>
-                  <span>{selectedArchive.scene}</span>
-                  <span>{selectedArchive.node}</span>
-                </div>
-                <strong>亮点</strong>
-                <ul className="template-list">
-                  {selectedArchive.highlight.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-                <strong>不足</strong>
-                <ul className="template-list">
-                  {selectedArchive.weaknesses.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>参考提炼</h3>
-                <strong>可复用</strong>
-                <div className="tag-row">{selectedArchive.reusable.map((item) => <span key={item}>{item}</span>)}</div>
-                <strong>需规避</strong>
-                <div className="tag-row">{selectedArchive.avoid.map((item) => <span key={item}>{item}</span>)}</div>
-              </div>
-              <div className="research-block">
-                <h3>内容适配建议</h3>
-                <ul className="template-list">
-                  {selectedArchive.adaptation.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div className="research-block">
-                <h3>数据关联分析</h3>
-                <div className="research-metric-stack">
-                  {selectedArchive.metrics.map((item) => (
-                    <div key={item.label} className="research-metric-line">
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
-                    </div>
-                  ))}
-                </div>
-                <p className="muted">建议优先复用高互动、高共鸣的内容骨架，再按当前项目的节点和人群重新改写表达。</p>
-              </div>
-            </div>
-          </Card>
-        </div>
+          )}
+        >
+          <FlowTransferNotice
+            status={finalReport ? "已完成" : hasBriefBreakdown && fixedDoneCount > 0 ? "可继续生成" : "缺资料"}
+            title={finalReport ? "报告已生成" : "前序结果自动汇总到这里"}
+            detail={finalReport ? "这份报告可继续给方案大纲、PPT 或讲稿模块使用。" : "系统会合并 Brief 拆解、固定模块分析和客户选择的可变模块结论，整理成一份完整营销调研报告。"}
+          />
+          <div className="report-source-grid">
+            <Info label="Brief 拆解" value={briefBreakdown ? "已生成" : "未生成"} />
+            <Info label="固定模块" value={`${fixedDoneCount} / ${fixedResearchModules.length}`} />
+            <Info label="可变模块" value={`${variableDoneCount} 组`} />
+            <Info label="资料库引用" value={`${linkedResources.length} 份`} />
+          </div>
+          <pre className="ai-output">{finalReport || "点击“生成完整报告”后，系统会把 Brief 拆解、固定模块分析、客户选择的可变模块分析统一整理成一份完整的营销调研报告。"}</pre>
+        </Card>
       )}
     </section>
   );
 }
 
-function PeopleManagement({ members, setMembers, projects, openProject, addJob }: { members: Member[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; projects: Project[]; openProject: (id: number, initialTab?: string) => void; addJob: (type: string, name: string, source: string) => void }) {
+function ResearchFlowStatus({
+  steps,
+  activeTab,
+  setTab,
+}: {
+  steps: FlowStep[];
+  activeTab: ResearchTab;
+  setTab: (tab: ResearchTab) => void;
+}) {
+  return (
+    <div className="research-flow-status" aria-label="营销调研状态流">
+      {steps.map((step, index) => (
+        <button
+          key={step.key}
+          className={`flow-status-card ${activeTab === step.key ? "active" : ""} ${flowStatusClass(step.status)}`}
+          onClick={() => setTab(step.key)}
+        >
+          <span className="flow-index">{index + 1}</span>
+          <div>
+            <div className="flow-card-head">
+              <strong>{step.title}</strong>
+              <em>{step.status}</em>
+            </div>
+            <p>{step.detail}</p>
+            <small>{step.transfer}</small>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FlowTransferNotice({ status, title, detail }: { status: FlowStepStatus; title: string; detail: string }) {
+  return (
+    <div className={`flow-transfer-notice ${flowStatusClass(status)}`}>
+      <span>{status}</span>
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function flowStatusClass(status: FlowStepStatus) {
+  if (status === "已完成") return "done";
+  if (status === "可继续生成") return "ready";
+  return "missing";
+}
+
+function GlobalAiConfigNotice({ apiConfig }: { apiConfig: BriefApiConfig }) {
+  const isConfigured = Boolean(apiConfig.endpoint.trim());
+  return (
+    <div className={`global-ai-config-notice ${isConfigured ? "configured" : "fallback"}`}>
+      <span>{isConfigured ? "已使用全局 AI" : "本地兜底"}</span>
+      <div>
+        <strong>{isConfigured ? "接口配置来自系统设置" : "系统设置未配置 AI 接口"}</strong>
+        <p>{isConfigured ? `当前模型：${apiConfig.model || "未指定，由接口默认处理"}。如需修改接口、Key 或模型，请到系统设置统一调整。` : "当前页面会先使用本地规则生成；如需调用外部模型，请到系统设置填写全局 AI 配置。"}</p>
+      </div>
+    </div>
+  );
+}
+
+function WorkbenchAssistStrip({ status, missingItems }: { status: string; missingItems: string[] }) {
+  return (
+    <div className="workbench-assist-strip">
+      <div>
+        <strong>当前状态</strong>
+        <p>{status}</p>
+      </div>
+      <div>
+        <strong>{missingItems.length ? "建议补充" : "资料状态"}</strong>
+        {missingItems.length ? (
+          <div className="tag-row">{missingItems.map((item) => <span key={item}>{item}</span>)}</div>
+        ) : (
+          <p>关键资料已比较完整，可以继续生成或导出。</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecommendedResources({ resources, onAddAll }: { resources: Resource[]; onAddAll: () => void }) {
+  if (!resources.length) return null;
+  return (
+    <div className="recommended-resources">
+      <div className="resource-link-head">
+        <div>
+          <strong>智能推荐资料</strong>
+          <p>根据当前 Brief、营销目标和已生成内容自动匹配，建议一键带入。</p>
+        </div>
+        <button className="ghost-button" onClick={onAddAll}>全部关联</button>
+      </div>
+      <div className="tag-row">
+        {resources.map((resource) => <span key={resource.id}>{resource.title}</span>)}
+      </div>
+    </div>
+  );
+}
+
+function ResourceLinkPicker({
+  title,
+  resources,
+  selectedIds,
+  onToggle,
+  hint,
+}: {
+  title: string;
+  resources: Resource[];
+  selectedIds: number[];
+  onToggle: (resourceId: number) => void;
+  hint: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const resourceTypes = Array.from(new Set(resources.map((resource) => resource.type).filter(Boolean)));
+  const filteredResources = resources
+    .filter((resource) => !typeFilter || resource.type === typeFilter)
+    .filter((resource) => includesQuery([resource.title, resource.type, resource.summary, resource.content, ...(resource.tags || [])], query))
+    .slice(0, 12);
+
+  return (
+    <div className="resource-link-picker">
+      <div className="resource-link-head">
+        <div>
+          <strong>{title}</strong>
+          <p>{hint}</p>
+        </div>
+        <span>{selectedIds.length} 份已关联</span>
+      </div>
+      <div className="resource-link-tools">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索资料、标签、摘要" />
+        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+          <option value="">全部类型</option>
+          {resourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+        </select>
+      </div>
+      <div className="resource-link-list">
+        {filteredResources.length ? filteredResources.map((resource) => {
+          const checked = selectedIds.includes(resource.id);
+          return (
+            <button key={resource.id} className={checked ? "resource-link-item active" : "resource-link-item"} onClick={() => onToggle(resource.id)}>
+              <span>{checked ? "已选" : "选择"}</span>
+              <div>
+                <strong>{resource.title}</strong>
+                <p>{resource.type} / {(resource.tags || []).slice(0, 3).join(" / ") || "无标签"}</p>
+                <small>{resource.summary || summarize(resource.content || "")}</small>
+              </div>
+            </button>
+          );
+        }) : <div className="empty-state compact">没有匹配的资料。</div>}
+      </div>
+    </div>
+  );
+}
+
+function LinkedResourceSummary({ resources }: { resources: Resource[] }) {
+  return (
+    <div className="linked-resource-summary">
+      <strong>资料库引用</strong>
+      {resources.length ? (
+        <div className="tag-row">
+          {resources.map((resource) => <span key={resource.id}>{resource.title}</span>)}
+        </div>
+      ) : (
+        <p>暂未关联资料库文件。可在“拆 Brief”页选择历史方案、竞品资料或复盘报告。</p>
+      )}
+    </div>
+  );
+}
+
+function PeopleManagement({
+  members,
+  setMembers,
+  projects,
+  isAdmin,
+  initialDetailView,
+  clearInitialDetailView,
+  openProject,
+  addJob,
+}: {
+  members: Member[];
+  setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
+  projects: Project[];
+  isAdmin: boolean;
+  initialDetailView: PeopleDetailView | null;
+  clearInitialDetailView: () => void;
+  openProject: (id: number, initialTab?: string) => void;
+  addJob: (type: string, name: string, source: string) => void;
+}) {
   const [showForm, setShowForm] = useState(false);
   const [advice, setAdvice] = useState("");
+  const [detailView, setDetailView] = useState<PeopleDetailView | null>(initialDetailView);
   const [form, setForm] = useState({
     name: "",
     role: "执行策划",
@@ -4975,6 +5993,17 @@ function PeopleManagement({ members, setMembers, projects, openProject, addJob }
   const taskStats = useMemo(() => {
     return buildMemberLoadStats(members, projects);
   }, [members, projects]);
+
+  useEffect(() => {
+    if (!initialDetailView) return;
+    setDetailView(initialDetailView);
+    clearInitialDetailView();
+  }, [clearInitialDetailView, initialDetailView]);
+  const activeTaskRows = projects.flatMap((project) => project.tasks
+    .filter((task) => task.status !== "已完成")
+    .map((task) => ({ project, task, owner: memberName(members, task.ownerId, task.owner), risk: inferTaskRisk(task, project) })));
+  const delayedTaskRows = activeTaskRows.filter(({ task }) => task.status === "延期");
+  const overloadedRows = taskStats.filter((item) => item.loadStatus === "偏高" || item.loadStatus === "过载");
   const assignmentRows = useMemo(() => {
     return projects.map((project) => {
       const activeTasks = project.tasks.filter((task) => task.status !== "已完成");
@@ -5120,14 +6149,95 @@ ${actionLines.join("\n")}
       <PageTitle
         title="人员管理"
         subtitle="查看成员能力、任务压力和可调配状态。"
-        action={<button className="primary-button" onClick={() => setShowForm((current) => !current)}>新增成员</button>}
+        action={isAdmin ? <button className="primary-button" onClick={() => setShowForm((current) => !current)}>新增成员</button> : <span className="soft-pill">只读模式</span>}
       />
       <div className="metric-grid">
-        <Metric label="团队成员" value={members.length} tone="blue" />
-        <Metric label="进行中任务" value={taskStats.reduce((total, item) => total + item.activeTasks.length, 0)} tone="green" />
-        <Metric label="偏高负载" value={taskStats.filter((item) => item.loadStatus === "偏高" || item.loadStatus === "过载").length} tone="orange" />
-        <Metric label="延期任务" value={taskStats.reduce((total, item) => total + item.delayedTasks.length, 0)} tone="red" />
+        <Metric label="团队成员" value={members.length} tone="blue" onClick={() => setDetailView("members")} />
+        <Metric label="进行中任务" value={activeTaskRows.length} tone="green" onClick={() => setDetailView("active")} />
+        <Metric label="偏高负载" value={overloadedRows.length} tone="orange" onClick={() => setDetailView("overload")} />
+        <Metric label="延期任务" value={delayedTaskRows.length} tone="red" onClick={() => setDetailView("delayed")} />
       </div>
+      {detailView && (
+        <Card
+          title={{
+            members: "团队成员详情",
+            active: "进行中任务详情",
+            overload: "偏高负载详情",
+            delayed: "延期任务详情",
+          }[detailView]}
+          action={<button className="ghost-button" onClick={() => setDetailView(null)}>返回总览</button>}
+        >
+          {detailView === "members" && (
+            <div className="table-scroll">
+              <table className="joined-table">
+                <thead>
+                  <tr>
+                    <th>成员</th>
+                    <th>角色</th>
+                    <th>状态</th>
+                    <th>未完成任务</th>
+                    <th>延期任务</th>
+                    <th>容量</th>
+                    <th>负载</th>
+                    <th>能力标签</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {taskStats.map(({ member, activeTasks, delayedTasks, loadRate, loadStatus }) => (
+                    <tr key={member.id}>
+                      <td><strong>{member.name}</strong></td>
+                      <td>{member.role}</td>
+                      <td>{member.status}</td>
+                      <td>{activeTasks.length}</td>
+                      <td>{delayedTasks.length}</td>
+                      <td>{member.monthlyCapacity}</td>
+                      <td>{loadStatus} / {loadRate}%</td>
+                      <td>{member.skills.join("、")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {detailView === "active" && (
+            <PeopleTaskDetailTable rows={activeTaskRows} openProject={openProject} />
+          )}
+          {detailView === "delayed" && (
+            <PeopleTaskDetailTable rows={delayedTaskRows} openProject={openProject} />
+          )}
+          {detailView === "overload" && (
+            <div className="table-scroll">
+              <table className="joined-table">
+                <thead>
+                  <tr>
+                    <th>成员</th>
+                    <th>角色</th>
+                    <th>负载</th>
+                    <th>未完成任务</th>
+                    <th>延期任务</th>
+                    <th>状态</th>
+                    <th>建议</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overloadedRows.map(({ member, activeTasks, delayedTasks, loadRate, loadStatus }) => (
+                    <tr key={member.id}>
+                      <td><strong>{member.name}</strong></td>
+                      <td>{member.role}</td>
+                      <td>{loadStatus} / {loadRate}%</td>
+                      <td>{activeTasks.length}</td>
+                      <td>{delayedTasks.length}</td>
+                      <td>{member.status}</td>
+                      <td>{delayedTasks.length ? "优先拆分延期任务并设置备份负责人" : "控制新增任务，保留讲标和临时修改缓冲"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+      <div className="assignment-master">
       <Card title="项目人员分工总表" action={<span className="soft-pill">随项目排期自动更新</span>}>
         <div className="table-scroll">
           <table className="joined-table">
@@ -5182,7 +6292,8 @@ ${actionLines.join("\n")}
           </table>
         </div>
       </Card>
-      {showForm && (
+      </div>
+      {showForm && isAdmin && (
         <Card title="新增成员">
           <div className="form-grid">
             <Field label="姓名" value={form.name} onChange={(value) => setForm({ ...form, name: value })} />
@@ -5195,36 +6306,51 @@ ${actionLines.join("\n")}
           <button className="primary-button wide" onClick={addMember}>保存成员</button>
         </Card>
       )}
-      <div className="people-grid">
+      <div className="people-compact-section">
+        <div className="section-mini-title">
+          <strong>人员名单</strong>
+          <span>轻量维护成员状态、容量和能力标签</span>
+        </div>
+      <div className="people-grid compact-people-grid">
         {taskStats.map(({ member, activeTasks, delayedTasks, loadRate, loadStatus }) => (
           <Card title={member.name} key={member.id}>
             <div className="person-card">
-              <div className="editable-stack">
-                <Field label="姓名" value={member.name} onChange={(value) => updateMember(member.id, "name", value)} />
-                <Field label="角色" value={member.role} onChange={(value) => updateMember(member.id, "role", value)} />
-                <label className="field-block">
-                  <span>状态</span>
-                  <select value={member.status} onChange={(event) => updateMember(member.id, "status", event.target.value as Member["status"])}>
-                    {memberStatusOptions.map((status) => <option key={status}>{status}</option>)}
-                  </select>
-                </label>
-              </div>
+              {isAdmin ? (
+                <div className="editable-stack">
+                  <Field label="姓名" value={member.name} onChange={(value) => updateMember(member.id, "name", value)} />
+                  <Field label="角色" value={member.role} onChange={(value) => updateMember(member.id, "role", value)} />
+                  <label className="field-block">
+                    <span>状态</span>
+                    <select value={member.status} onChange={(event) => updateMember(member.id, "status", event.target.value as Member["status"])}>
+                      {memberStatusOptions.map((status) => <option key={status}>{status}</option>)}
+                    </select>
+                  </label>
+                </div>
+              ) : (
+                <div className="readonly-member-head">
+                  <strong>{member.role}</strong>
+                  <span>{member.status}</span>
+                </div>
+              )}
               <Progress value={Math.min(loadRate, 100)} />
               <div className="person-stats">
                 <Info label="未完成任务" value={`${activeTasks.length} 个`} />
                 <Info label="延期任务" value={`${delayedTasks.length} 个`} />
                 <Info label="负载状态" value={loadStatus} />
               </div>
-              <div className="editable-stack">
-                <Field label="月度容量" type="number" value={`${member.monthlyCapacity}`} onChange={(value) => updateMember(member.id, "monthlyCapacity", Number(value) || 0)} />
-                <Field label="平均交付天数" type="number" value={`${member.avgDeliveryDays}`} onChange={(value) => updateMember(member.id, "avgDeliveryDays", Number(value) || 0)} />
-                <Field label="能力标签" value={member.skills.join(", ")} onChange={(value) => updateMember(member.id, "skills", value.split(/[,，]/).map((skill) => skill.trim()).filter(Boolean))} />
-              </div>
+              {isAdmin && (
+                <div className="editable-stack">
+                  <Field label="月度容量" type="number" value={`${member.monthlyCapacity}`} onChange={(value) => updateMember(member.id, "monthlyCapacity", Number(value) || 0)} />
+                  <Field label="平均交付天数" type="number" value={`${member.avgDeliveryDays}`} onChange={(value) => updateMember(member.id, "avgDeliveryDays", Number(value) || 0)} />
+                  <Field label="能力标签" value={member.skills.join(", ")} onChange={(value) => updateMember(member.id, "skills", value.split(/[,，]/).map((skill) => skill.trim()).filter(Boolean))} />
+                </div>
+              )}
               <div className="tag-row">{member.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-              <button className="link-button danger" onClick={() => removeMember(member.id)}>删除成员</button>
+              {isAdmin && <button className="link-button danger" onClick={() => removeMember(member.id)}>删除成员</button>}
             </div>
           </Card>
         ))}
+      </div>
       </div>
       <div className="split-panel">
         <Card title="成员负载表" action={<button className="primary-button" onClick={generateAdvice}>AI 分析负载</button>}>
@@ -5243,16 +6369,18 @@ ${actionLines.join("\n")}
             <tbody>
               {taskStats.map(({ member, activeTasks, delayedTasks, loadStatus }) => (
                 <tr key={member.id}>
-                  <td><input className="table-input" value={member.name} onChange={(event) => updateMember(member.id, "name", event.target.value)} /></td>
-                  <td><input className="table-input" value={member.role} onChange={(event) => updateMember(member.id, "role", event.target.value)} /></td>
+                  <td>{isAdmin ? <input className="table-input" value={member.name} onChange={(event) => updateMember(member.id, "name", event.target.value)} /> : member.name}</td>
+                  <td>{isAdmin ? <input className="table-input" value={member.role} onChange={(event) => updateMember(member.id, "role", event.target.value)} /> : member.role}</td>
                   <td>
-                    <select className="table-input" value={member.status} onChange={(event) => updateMember(member.id, "status", event.target.value as Member["status"])}>
-                      {memberStatusOptions.map((status) => <option key={status}>{status}</option>)}
-                    </select>
+                    {isAdmin ? (
+                      <select className="table-input" value={member.status} onChange={(event) => updateMember(member.id, "status", event.target.value as Member["status"])}>
+                        {memberStatusOptions.map((status) => <option key={status}>{status}</option>)}
+                      </select>
+                    ) : member.status}
                   </td>
                   <td>{activeTasks.length}</td>
                   <td>{delayedTasks.length}</td>
-                  <td><input className="table-input tiny" type="number" value={member.monthlyCapacity} onChange={(event) => updateMember(member.id, "monthlyCapacity", Number(event.target.value) || 0)} /></td>
+                  <td>{isAdmin ? <input className="table-input tiny" type="number" value={member.monthlyCapacity} onChange={(event) => updateMember(member.id, "monthlyCapacity", Number(event.target.value) || 0)} /> : member.monthlyCapacity}</td>
                   <td>{loadStatus}</td>
                 </tr>
               ))}
@@ -5264,6 +6392,58 @@ ${actionLines.join("\n")}
         </Card>
       </div>
     </section>
+  );
+}
+
+function PeopleTaskDetailTable({
+  rows,
+  openProject,
+}: {
+  rows: Array<{ project: Project; task: ProjectTask; owner: string; risk: Risk }>;
+  openProject: (id: number, initialTab?: string) => void;
+}) {
+  return (
+    <div className="table-scroll">
+      <table className="joined-table">
+        <thead>
+          <tr>
+            <th>任务</th>
+            <th>项目</th>
+            <th>负责人</th>
+            <th>阶段</th>
+            <th>进度</th>
+            <th>状态</th>
+            <th>风险</th>
+            <th>截止</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length ? rows.map(({ project, task, owner, risk }) => (
+            <tr key={`${project.id}-${task.id}`}>
+              <td><strong>{task.name}</strong></td>
+              <td>{project.name}</td>
+              <td>{owner}</td>
+              <td>{task.phase}</td>
+              <td>
+                <div className="table-progress">
+                  <Progress value={task.progress} />
+                  <span>{task.progress}%</span>
+                </div>
+              </td>
+              <td>{task.status}</td>
+              <td><RiskBadge risk={risk} /></td>
+              <td>{task.end}</td>
+              <td><button className="link-button" onClick={() => openProject(project.id, "排期表")}>查看排期</button></td>
+            </tr>
+          )) : (
+            <tr>
+              <td colSpan={9}>暂无对应任务。</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -5301,81 +6481,331 @@ function AiJobs({ jobs, embedded = false }: { jobs: AiJob[]; embedded?: boolean 
   );
 }
 
+type ScriptForm = {
+  usage: string;
+  duration: string;
+  tone: string;
+  speakerStyle: string;
+};
+
+function buildScriptPrompt(form: ScriptForm, files: BriefInputFile[]) {
+  const parsedPpt = files.length
+    ? files.map((file, index) => `【文件 ${index + 1}】${file.name}
+解析状态：${file.parseStatus}${file.parseError ? `（${file.parseError}）` : ""}
+摘要：${file.summary}
+正文：
+${file.content || "暂无可解析正文"}`).join("\n\n")
+    : "暂无上传文件";
+  return `你是资深游戏营销提案讲稿教练。请基于用户输入生成适合宣讲使用的讲稿输出。
+
+讲稿场景：
+讲稿用途：${form.usage || "未填写"}
+演讲时长：${form.duration || "未填写"}
+演讲调性：${form.tone || "未填写"}
+
+核心素材：
+上传 PPT / 方案文件解析内容：
+${parsedPpt}
+
+演讲者风格：
+${form.speakerStyle || "未填写"}
+
+补充要求：
+请从上传文件中自动识别必讲模块、客户关注重点、禁忌内容和互动环节机会；识别不到请标注“需补充确认”。
+
+请输出：
+一、多场景讲稿定位
+- 判断该讲稿属于客户提案、内部汇报、投标答辩、项目复盘、发布会或内部培训中的哪类。
+- 给出适配的开场策略、内容重点和收尾策略。
+
+二、逐页 / 逐模块宣讲逐字稿
+- 按 PPT 或方案模块拆分。
+- 每页包含：讲稿正文、这一页要强调的重点、上一页到下一页的逻辑衔接。
+- 标注语气和节奏提示，例如“此处语气坚定”“此处放慢语速”“停顿 2 秒”。
+
+三、多版本时长适配
+- 输出 ${form.duration || "当前时长"} 主版本。
+- 同时给出 15 分钟 / 30 分钟 / 60 分钟版本的删减或扩展建议。
+
+四、风格化表达
+- 按“${form.tone || "专业严谨"}”调性提供表达方式。
+- 提炼 3-5 句宣讲金句或记忆点。
+
+五、宣讲辅助物料
+- 讲前准备清单。
+- 客户可能追问的问题与答法。
+- 可插入的互动问题。
+- 需要提前确认的素材、数据或资源。
+
+规则：
+1. 不要编造 PPT 中没有的事实；没有数据就标注“需补充数据”。
+2. 禁忌内容必须避开。
+3. 讲稿要像人能直接照着讲，不要只写大纲。
+4. 控制节奏，避免每页都冗长。`;
+}
+
+function buildLocalScriptOutput(form: ScriptForm, files: BriefInputFile[]) {
+  const usage = form.usage || "客户提案";
+  const duration = form.duration || "20分钟";
+  const tone = form.tone || "专业严谨";
+  const parsedText = files.map((file) => `${file.summary}\n${file.content}`).join("\n");
+  const modules = Array.from(parsedText.matchAll(/第\s*\d+\s*页\s*\n([^\n]+)/g)).map((match) => match[1].trim()).filter(Boolean).slice(0, 8);
+  const fallbackModules = ["方案核心策略", "执行计划", "优势亮点"];
+  const moduleList = modules.length ? modules : fallbackModules;
+  return `一、多场景讲稿定位
+- 场景判断：${usage}。
+- 时长目标：${duration}，建议采用“背景破题 - 核心策略 - 执行落地 - 优势收束”的结构。
+- 演讲调性：${tone}，表达要兼顾专业判断和可落地说明。
+
+二、逐页 / 逐模块宣讲逐字稿
+${moduleList.map((module, index) => `【${index + 1}. ${module}】
+讲稿正文：这一部分我们重点说明${module}。结合本次方案的核心亮点，建议先讲为什么这个模块重要，再讲我们怎么做，最后讲它对客户关注的预算、执行难度或效果预期有什么帮助。
+宣讲重点：${files.length ? "基于上传 PPT 解析内容提炼。" : "需上传 PPT 或方案文件。"}
+逻辑衔接：讲完本页后，顺势过渡到下一部分的落地动作或效果判断。
+语气节奏：此处语气保持${tone}；关键结论前停顿 1 秒，避免语速过快。`).join("\n\n")}
+
+三、多版本时长适配
+- 15 分钟版：保留背景、核心策略、执行计划、优势亮点，每个模块控制 2-3 分钟。
+- 30 分钟版：补充客户关注重点、案例依据和风险预案。
+- 60 分钟版：加入详细执行拆解、预算解释、互动问答和备选方案说明。
+
+四、风格化表达
+- 宣讲金句 1：这套方案不只解决“怎么做”，更回答“为什么现在做、为什么这样做”。
+- 宣讲金句 2：我们把创意、执行和风险放在同一条链路里，确保方案既好讲，也能落地。
+- 宣讲金句 3：所有动作都会围绕客户最关心的“效果预期与落地确定性”来收束。
+
+五、宣讲辅助物料
+- 讲前准备：确认 PPT 页码、预算口径、执行节点、案例素材、禁忌内容。
+- 可能追问：预算是否可控？执行难度在哪里？效果如何预估？资源是否确定？
+- 建议答法：先回应客户关注点，再给依据和备选方案。
+- 互动设计：可在核心策略讲完后加入一句提问：这个方向是否符合贵方对本次项目的优先级判断？
+- 禁忌提醒：请讲前确认未确定资源、成本细节和效果数据是否可提。`;
+}
+
+function ScriptAssistant({ resources, addJob }: { resources: Resource[]; addJob: (type: string, name: string, source: string) => void }) {
+  const [apiConfig] = useGlobalAiConfig();
+  const [form, setForm] = usePersistentState<ScriptForm>("strategy-center-script-form", {
+    usage: "客户提案",
+    duration: "20分钟",
+    tone: "专业严谨",
+    speakerStyle: "语速适中，表达直接",
+  });
+  const [output, setOutput] = usePersistentState("strategy-center-script-output", "");
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [parsedFiles, setParsedFiles] = useState<BriefInputFile[]>([]);
+  const [linkedResourceIds, setLinkedResourceIds] = usePersistentState<number[]>("strategy-center-script-linked-resources", []);
+  const [fileMessage, setFileMessage] = useState("");
+  const [isParsingFiles, setIsParsingFiles] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+
+  const updateForm = (key: keyof ScriptForm, value: string) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+  const linkedResources = resources.filter((resource) => linkedResourceIds.includes(resource.id));
+  const linkedResourceFiles = linkedResources.map(resourceToInputFile);
+  const scriptRecommendationContext = `${form.usage} ${form.duration} ${form.tone} ${form.speakerStyle} ${parsedFiles.map((file) => `${file.name} ${file.summary}`).join(" ")}`;
+  const recommendedResources = resources
+    .filter((resource) => !linkedResourceIds.includes(resource.id))
+    .map((resource) => ({ resource, score: scoreResource(resource, scriptRecommendationContext) }))
+    .filter((item) => item.score > 1)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map((item) => item.resource);
+  const missingScriptInputs = [
+    !form.usage.trim() && "讲稿用途",
+    !form.duration.trim() && "演讲时长",
+    !form.tone.trim() && "演讲调性",
+    !form.speakerStyle.trim() && "演讲者风格",
+    !selectedFiles.length && !parsedFiles.length && !linkedResources.length && "PPT / 方案素材",
+    linkedResources.length === 0 && "历史方案 / 复盘报告 / 客户关注资料",
+  ].filter(Boolean) as string[];
+  const scriptStatus = isRunning ? "正在生成讲稿" : output ? "讲稿已生成，可导出" : parsedFiles.length || linkedResources.length ? "素材已进入讲稿工作台" : "等待上传或关联素材";
+
+  const toggleLinkedResource = (resourceId: number) => {
+    setLinkedResourceIds((current) => current.includes(resourceId) ? current.filter((id) => id !== resourceId) : [...current, resourceId]);
+  };
+
+  const linkRecommendedResources = () => {
+    setLinkedResourceIds((current) => Array.from(new Set([...current, ...recommendedResources.map((resource) => resource.id)])));
+  };
+
+  const exportScript = () => {
+    downloadMarkdown(`讲稿输出-${form.usage || today()}.md`, "讲稿输出", output);
+  };
+
+  const addScriptFiles = (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setSelectedFiles((current) => {
+      const next = [...current];
+      Array.from(fileList).forEach((file) => {
+        const exists = next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+        if (!exists) next.push(file);
+      });
+      return next;
+    });
+    setFileMessage("已加入文件，点击解析文件后会读取 PPT/方案内容。");
+  };
+
+  const removeScriptFile = (index: number) => {
+    setSelectedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+  };
+
+  const parseScriptFiles = async () => {
+    if (!selectedFiles.length) {
+      setFileMessage("请先上传 PPT 或方案文件。");
+      return parsedFiles;
+    }
+    setIsParsingFiles(true);
+    setFileMessage("");
+    try {
+      const body = new FormData();
+      selectedFiles.forEach((file) => body.append("files", file));
+      body.append("type", "讲稿素材");
+      body.append("title", "讲稿输入文件");
+      const response = await fetch("/api/resources/upload", { method: "POST", body });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "讲稿文件解析失败。");
+      const files = (result.resources ?? []).map((item: Partial<BriefInputFile & Resource>) => ({
+        id: item.id ?? Date.now(),
+        name: item.name ?? item.fileName ?? item.title ?? "讲稿输入文件",
+        fileSize: item.fileSize,
+        mimeType: item.mimeType,
+        parseStatus: item.parseStatus === "失败" ? "失败" : "成功",
+        parseError: item.parseError,
+        summary: item.summary ?? summarize(item.content ?? ""),
+        content: item.content ?? "",
+        structuredContent: item.structuredContent,
+      })) as BriefInputFile[];
+      setParsedFiles(files);
+      setFileMessage(`已解析 ${files.length} 个文件。`);
+      addJob("讲稿素材解析", `解析 ${files.length} 个讲稿输入文件`, "讲稿输出");
+      return files;
+    } catch (error) {
+      setFileMessage(error instanceof Error ? error.message : "讲稿文件解析失败。");
+      return parsedFiles;
+    } finally {
+      setIsParsingFiles(false);
+    }
+  };
+
+  const runScript = async () => {
+    setIsRunning(true);
+    try {
+      const inputFiles = selectedFiles.length && !parsedFiles.length ? await parseScriptFiles() : parsedFiles;
+      const combinedFiles = [...inputFiles, ...linkedResourceFiles];
+      const prompt = buildScriptPrompt(form, combinedFiles);
+      if (apiConfig.endpoint.trim()) {
+        setOutput("正在生成讲稿...");
+        const response = await fetch("/api/marketing-research-run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: apiConfig.endpoint.trim(),
+            apiKey: apiConfig.apiKey.trim(),
+            model: apiConfig.model.trim() || undefined,
+            input: { ...form, files: combinedFiles.map((file) => ({ name: file.name, summary: file.summary, content: file.content })), linkedResources },
+            prompt,
+            messages: [
+              { role: "system", content: "你是资深游戏营销提案讲稿教练，擅长把 PPT 和方案内容转成可直接宣讲的逐字稿、节奏提示和答辩辅助物料。" },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || result.error || "讲稿生成失败。");
+        const text = extractAiText(result);
+        setOutput(text || JSON.stringify(result, null, 2));
+      } else {
+        setOutput(buildLocalScriptOutput(form, combinedFiles));
+      }
+      addJob("讲稿生成", `${form.usage || "未命名"} ${form.duration || ""}讲稿`, "讲稿输出");
+    } catch (error) {
+      setOutput(error instanceof Error ? error.message : "讲稿生成失败。");
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <section className="page">
+      <PageTitle title="讲稿输出" subtitle="把方案 PPT、核心亮点和客户关注点转成可直接宣讲的逐字稿、节奏提示和答辩辅助物料。" />
+      <WorkbenchAssistStrip status={scriptStatus} missingItems={missingScriptInputs} />
+      <div className="script-workbench">
+        <Card title="讲稿输入">
+          <div className="form-grid">
+            <Field label="讲稿用途" value={form.usage} onChange={(value) => updateForm("usage", value)} />
+            <Field label="演讲时长" value={form.duration} onChange={(value) => updateForm("duration", value)} />
+            <Field label="演讲调性" value={form.tone} onChange={(value) => updateForm("tone", value)} />
+            <Field label="演讲者风格" value={form.speakerStyle} onChange={(value) => updateForm("speakerStyle", value)} />
+          </div>
+          <div className="brief-file-panel">
+            <label className="upload-zone compact-upload">
+              <strong>上传 PPT / 方案文件</strong>
+              <span>支持 PPTX、Word、PDF、TXT、Excel；AI 会读取文件内容自动识别核心亮点、客户关注点、必讲模块、禁忌与互动机会</span>
+              <input type="file" multiple accept=".pptx,.docx,.pdf,.txt,.md,.xlsx,.xls,.csv" onChange={(event) => addScriptFiles(event.target.files)} />
+              <em>{selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件` : "点击选择文件"}</em>
+            </label>
+            {selectedFiles.length > 0 && (
+              <div className="file-list">
+                {selectedFiles.map((file, index) => (
+                  <div className="file-item" key={`${file.name}-${file.size}-${file.lastModified}`}>
+                    <span>{file.name}</span>
+                    <button className="link-button danger" onClick={() => removeScriptFile(index)}>移除</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="inline-actions">
+              <button className="ghost-button" onClick={parseScriptFiles} disabled={isParsingFiles}>{isParsingFiles ? "解析中..." : "解析文件"}</button>
+              {fileMessage && <span>{fileMessage}</span>}
+            </div>
+            {parsedFiles.length > 0 && (
+              <div className="brief-input-list">
+                {parsedFiles.map((file) => (
+                  <div className="brief-input-card" key={file.id}>
+                    <strong>{file.name}</strong>
+                    <span>{formatFileSize(file.fileSize)} / {file.parseStatus}</span>
+                    <p>{file.summary}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <ResourceLinkPicker
+            title="关联资料库"
+            resources={resources}
+            selectedIds={linkedResourceIds}
+            onToggle={toggleLinkedResource}
+            hint="可选择完整方案 PPT、历史方案、客户关注资料、复盘报告或竞品资料；AI 会和上传文件一起读取并生成讲稿。"
+          />
+          <RecommendedResources resources={recommendedResources} onAddAll={linkRecommendedResources} />
+          <GlobalAiConfigNotice apiConfig={apiConfig} />
+          <button className="primary-button wide" onClick={runScript} disabled={isRunning}>{isRunning ? "生成中..." : "生成讲稿"}</button>
+        </Card>
+        <Card title="讲稿与辅助物料" action={<button className="ghost-button" onClick={exportScript} disabled={!output}>导出讲稿</button>}>
+          <div className="brief-output-guide">
+            <span>逐字稿</span>
+            <span>时长版本</span>
+            <span>语气节奏</span>
+            <span>宣讲金句</span>
+            <span>答辩物料</span>
+          </div>
+          <pre className="ai-output">{output || "填写左侧信息后，点击“生成讲稿”。这里会输出多场景讲稿、逐页宣讲稿、多版本时长适配、语气节奏提示和宣讲辅助物料。"}</pre>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
 const marketingResearchModules = [
   {
-    name: "目标用户洞察",
-    summary: "围绕目标用户画像、需求痛点和偏好趋势，明确项目的核心营销方向。",
-    aiProvides: [
-      "目标用户画像：精准拆解用户年龄、性别、地域、兴趣爱好、游戏习惯、消费观念、活跃时段、付费场景、留存周期，标注核心用户与潜在用户差异。",
-      "用户需求分析：提炼用户核心需求、痛点和未被满足的需求，例如竞技类用户看重公平性和操作手感，休闲类用户看重轻量化和趣味性。",
-      "用户偏好趋势：结合行业数据分析目标用户偏好变化，给出营销适配建议，例如强化剧情向内容或社交互动场景。",
-      "调研结论总结：用简洁语言梳理核心洞察，明确营销方向，例如针对18-25岁男性用户突出竞技性和社交属性。",
-    ],
-    needs: [
-      "调研需求框架：游戏类型、调研核心目标，例如用户偏好、付费意愿、留存痛点或新用户画像。",
-      "基础信息：游戏核心玩法、目标年龄段、核心市场。",
-      "已有数据：过往用户调研报告、后台用户数据、用户评论等。",
-    ],
+    name: "固定模块整合",
+    summary: "一次性生成用户深度调查、黑话文化、产品自身、竞品行业四个必做模块。",
   },
-  {
-    name: "竞品分析",
-    summary: "拆解竞品营销动作、口碑和趋势，沉淀差异化打法与避坑建议。",
-    aiProvides: [
-      "竞品营销报告：梳理竞品核心营销动作，标注时间节点和效果，例如预热活动、节日营销、KOL合作和渠道投放。",
-      "竞品优劣势分析：对比营销优势与劣势，结合自身项目给出差异化建议。",
-      "竞品用户口碑分析：提炼应用商店、社交平台、论坛中的正负面评价，为亮点打造和风险规避提供参考。",
-      "竞品营销趋势预判：基于竞品过往动作预判后续营销方向，并给出自身应对策略。",
-    ],
-    needs: [
-      "竞品范围：核心竞品、潜在竞品、标杆竞品的名称及基础信息。",
-      "需求分析维度：营销渠道分配、线上线下活动、内容创意、用户口碑、付费模式、舆情表现等。",
-      "覆盖周期：近3个月、半年或指定营销周期的竞品动作。",
-    ],
-  },
-  {
-    name: "热点对齐",
-    summary: "筛选可借势的全网热点，输出创意灵感、素材框架和风险提示。",
-    aiProvides: [
-      "热点筛选匹配：抓取游戏圈、娱乐、社会、节日等热点，标注热度、持续时间和适配场景。",
-      "热点灵感库：结合游戏核心卖点，提供3-5个可落地营销创意点，明确创意核心、执行思路和预期效果。",
-      "素材库：整理热点相关文案、图片思路、短视频脚本框架，可直接复用或修改。",
-      "热点风险提示：标注时效性、争议性等潜在风险，并给出备用热点、尺度控制等规避建议。",
-    ],
-    needs: [
-      "核心需求：游戏类型、营销场景、营销调性，例如新品预热、版本更新、节日活动或品牌联动。",
-      "禁忌要求：不可使用的热点类型、需规避的创意方向，尤其适用于女性向、乙游等舆情敏感方案。",
-      "补充信息：游戏核心卖点、IP联动、画质优势、目标用户关注的热点领域。",
-    ],
-  },
-  {
-    name: "舆情分析",
-    summary: "监测游戏、活动和合作对象的舆情变化，形成预警、趋势和应对建议。",
-    aiProvides: [
-      "负面舆情预警：针对突发负面舆情第一时间推送预警，标注影响范围，并给出官方回应和安抚话术建议。",
-      "舆情趋势分析：生成舆情趋势图，分析变化原因，预判舆情走向。",
-      "舆情总结与建议：按周或按月汇总舆情情况，提炼核心问题并给出优化建议。",
-    ],
-    needs: [
-      "监测对象：游戏名称、别名、项目名称、核心关键词、活动名称、品牌联动对象和相关人员。",
-      "监测范围：微博、抖音、小红书、TapTap、B站、应用商店、新闻媒体等平台。",
-      "监测周期：实时监测、每日监测或特定时段监测，例如活动执行期间或新品上线后一周。",
-    ],
-  },
-  {
-    name: "往期营销内容",
-    summary: "整理历史方案、素材和效果数据，为当前项目提供可复用资产和适配建议。",
-    aiProvides: [
-      "过往内容分类整理：按类型、场景、节点分类过往营销内容，生成可检索内容库。",
-      "参考提炼：针对当前需求提炼过往内容亮点、不足、可复用点和需规避点。",
-      "内容适配建议：结合当前项目需求，将过往成功内容进行适配修改，给出修改方向。",
-      "数据关联分析：将营销内容与播放量、转化率、用户反馈等效果数据关联，识别高转化内容形式。",
-    ],
-    needs: [
-      "产品信息：游戏名称、过往营销项目、营销类型，例如线上推广、线下活动、KOL合作。",
-      "参考需求：方案大纲、PPT内容、文案、活动流程、投放渠道等。",
-      "过往资料：营销方案、PPT、文案、活动数据、复盘报告。",
-    ],
-  },
+  ...variableResearchScenarios.map((scenario) => ({
+    name: scenario.scene,
+    summary: `${scenario.modules.join(" / ")}；输出 ${scenario.output}。`,
+  })),
 ];
 
 function buildTargetUserInsightPrompt(form: { projectName: string; gameName: string; gameType: string; researchGoal: string; coreGameplay: string; targetAge: string; coreMarket: string; existingData: string; userComments: string; extraNotes: string }) {
@@ -5430,195 +6860,119 @@ ${form.extraNotes || "暂无"}`;
 type MarketingResearchForm = Record<string, string>;
 
 const defaultMarketingResearchForms: Record<string, MarketingResearchForm> = {
-  竞品分析: {
+  固定模块整合: {
     projectName: "",
     gameName: "",
-    competitorScope: "",
-    analysisDimensions: "营销渠道分配 / 线上线下推广活动 / 内容创意 / 用户口碑 / 付费模式 / 舆情表现",
-    coveragePeriod: "近3个月",
-    competitorActions: "",
-    userReputation: "",
-    extraNotes: "",
-  },
-  热点对齐: {
-    projectName: "",
     gameType: "",
-    marketingScene: "新品预热",
-    marketingTone: "",
-    coreSellingPoints: "",
-    forbiddenTopics: "",
-    targetHotFields: "",
+    marketingGoal: "",
+    currentVersion: "",
+    targetMarket: "",
+    existingMaterials: "",
+    userSignals: "",
+    competitorSignals: "",
     extraNotes: "",
   },
-  舆情分析: {
+  ...Object.fromEntries(variableResearchScenarios.map((scenario) => [scenario.scene, {
     projectName: "",
     gameName: "",
-    monitorKeywords: "",
-    monitorPlatforms: "微博 / 抖音 / 小红书 / TapTap / B站 / 应用商店 / 新闻媒体",
-    monitorPeriod: "实时监测 / 每日监测 / 活动执行期间",
-    currentSignals: "",
-    historicalIssues: "",
+    marketingGoal: scenario.scene,
+    productInfo: "",
+    userEvidence: "",
+    historicalCases: "",
+    riskNotes: "",
     extraNotes: "",
-  },
-  往期营销内容: {
-    projectName: "",
-    gameName: "",
-    pastProjects: "",
-    marketingTypes: "线上推广 / 线下活动 / KOL合作",
-    referenceNeeds: "方案大纲 / PPT内容 / 文案 / 活动流程 / 投放渠道",
-    pastMaterials: "",
-    performanceData: "",
-    extraNotes: "",
-  },
+  }])),
 };
 
 const marketingResearchFormConfigs: Record<string, { title: string; apiTitle: string; fields: Array<{ key: string; label: string; placeholder?: string }>; textareas: Array<{ key: string; placeholder: string }> }> = {
-  竞品分析: {
-    title: "竞品分析生成",
-    apiTitle: "竞品分析 API",
+  固定模块整合: {
+    title: "固定模块整合生成",
+    apiTitle: "标准框架 API",
     fields: [
-      { key: "projectName", label: "项目 / 游戏名称", placeholder: "例如：星河边境新品上线" },
-      { key: "gameName", label: "自身游戏名称", placeholder: "例如：星河边境" },
-      { key: "competitorScope", label: "竞品范围", placeholder: "核心竞品、潜在竞品、标杆竞品名称" },
-      { key: "analysisDimensions", label: "分析维度", placeholder: "营销渠道、内容创意、用户口碑等" },
-      { key: "coveragePeriod", label: "覆盖周期", placeholder: "例如：近3个月 / 半年" },
+      { key: "projectName", label: "项目 / 游戏名称", placeholder: "例如：周年庆前期调研" },
+      { key: "gameName", label: "游戏名称", placeholder: "例如：蛋仔派对" },
+      { key: "gameType", label: "游戏类型", placeholder: "例如：二次元 RPG / SLG / 竞技手游" },
+      { key: "marketingGoal", label: "营销目标", placeholder: "例如：版本拉新、老玩家回流、品牌联动" },
+      { key: "currentVersion", label: "当前版本 / 节点", placeholder: "例如：暑期大版本 / 新角色上线" },
+      { key: "targetMarket", label: "核心市场", placeholder: "例如：国内安卓渠道 / 港澳台 / 东南亚" },
     ],
     textareas: [
-      { key: "competitorActions", placeholder: "粘贴竞品营销动作：预热活动、节日营销、KOL合作、渠道投放、效果数据等。" },
-      { key: "userReputation", placeholder: "粘贴竞品用户口碑：应用商店、社交平台、论坛评论、负面舆情等。" },
-      { key: "extraNotes", placeholder: "补充信息：自身项目目标、客户关注点、需重点对比的竞品打法等。" },
+      { key: "existingMaterials", placeholder: "粘贴已有资料：Brief、过往调研、项目资料、版本信息、品宣口径等。" },
+      { key: "userSignals", placeholder: "粘贴用户信号：评论、社区讨论、玩家梗、内容偏好、渠道表现、投放反馈等。" },
+      { key: "competitorSignals", placeholder: "粘贴竞品 / 行业信息：近3个月竞品动作、翻车案例、行业热门营销形式、政策合规要求等。" },
+      { key: "extraNotes", placeholder: "补充限制：禁忌表达、客户要求、必须覆盖或可跳过的资料模块等。" },
     ],
   },
-  热点对齐: {
-    title: "热点对齐生成",
-    apiTitle: "热点对齐 API",
+  ...Object.fromEntries(variableResearchScenarios.map((scenario) => [scenario.scene, {
+    title: `${scenario.scene}增补调研生成`,
+    apiTitle: `${scenario.scene} API`,
     fields: [
-      { key: "projectName", label: "项目 / 游戏名称", placeholder: "例如：国风版本更新营销" },
-      { key: "gameType", label: "游戏类型", placeholder: "例如：国风MMORPG / 女性向 / 竞技手游" },
-      { key: "marketingScene", label: "营销场景", placeholder: "新品预热 / 版本更新 / 节日活动 / 品牌联动" },
-      { key: "marketingTone", label: "营销调性", placeholder: "热血 / 休闲 / 国风 / 科幻 / 治愈" },
-      { key: "targetHotFields", label: "目标热点领域", placeholder: "游戏圈 / 娱乐圈 / 体育圈 / 节日节点" },
+      { key: "projectName", label: "项目 / 游戏名称", placeholder: "例如：暑期版本营销" },
+      { key: "gameName", label: "游戏名称", placeholder: "例如：蛋仔派对" },
+      { key: "marketingGoal", label: "营销目标", placeholder: scenario.scene },
     ],
     textareas: [
-      { key: "coreSellingPoints", placeholder: "粘贴游戏核心卖点：独特玩法、IP联动、画质优势、角色设定、版本内容等。" },
-      { key: "forbiddenTopics", placeholder: "粘贴禁忌要求：不可使用的热点类型、敏感方向、负面热点、与调性不符的创意等。" },
-      { key: "extraNotes", placeholder: "补充信息：当前已关注热点、目标用户偏好的话题、客户特别要求等。" },
+      { key: "productInfo", placeholder: "粘贴产品 / 版本 / 活动信息：核心卖点、限制条件、可用资源、品宣口径等。" },
+      { key: "userEvidence", placeholder: `围绕关键问题投喂用户证据：${scenario.questions.slice(0, 3).join("；")}` },
+      { key: "historicalCases", placeholder: "粘贴历史案例：同 IP、同赛道、竞品或过往项目表现，含好评点、翻车点、可复用素材。" },
+      { key: "riskNotes", placeholder: "粘贴风险信息：舆情、合规、品牌雷点、玩家反感点、执行限制。" },
+      { key: "extraNotes", placeholder: "补充信息：客户特别关注点、必须回答的问题、输出偏好等。" },
     ],
-  },
-  舆情分析: {
-    title: "舆情分析生成",
-    apiTitle: "舆情分析 API",
-    fields: [
-      { key: "projectName", label: "项目名称", placeholder: "例如：春节活动上线" },
-      { key: "gameName", label: "游戏名称", placeholder: "含别名" },
-      { key: "monitorKeywords", label: "监测关键词", placeholder: "玩法、活动名、联动对象、制作人、KOL等" },
-      { key: "monitorPlatforms", label: "监测范围", placeholder: "微博、抖音、小红书、TapTap、B站等" },
-      { key: "monitorPeriod", label: "监测周期", placeholder: "实时 / 每日 / 活动期间 / 上线后一周" },
-    ],
-    textareas: [
-      { key: "currentSignals", placeholder: "粘贴当前舆情信号：用户投诉、讨论量变化、热门评论、媒体报道、客服反馈等。" },
-      { key: "historicalIssues", placeholder: "粘贴历史舆情问题：Bug、逼氪、活动争议、版本延期、官方回应记录等。" },
-      { key: "extraNotes", placeholder: "补充信息：希望重点判断的风险、需要输出的话术类型、内部处理限制等。" },
-    ],
-  },
-  往期营销内容: {
-    title: "往期营销内容生成",
-    apiTitle: "往期营销内容 API",
-    fields: [
-      { key: "projectName", label: "当前项目 / 游戏名称", placeholder: "例如：新品预热方案" },
-      { key: "gameName", label: "游戏名称", placeholder: "例如：星河边境" },
-      { key: "pastProjects", label: "过往营销项目", placeholder: "例如：2025新品上线、2026春节活动" },
-      { key: "marketingTypes", label: "营销类型", placeholder: "线上推广 / 线下活动 / KOL合作" },
-      { key: "referenceNeeds", label: "参考需求", placeholder: "方案大纲 / PPT / 文案 / 活动流程 / 投放渠道" },
-    ],
-    textareas: [
-      { key: "pastMaterials", placeholder: "粘贴过往资料：营销方案、PPT摘录、文案、活动流程、渠道计划、复盘报告等。" },
-      { key: "performanceData", placeholder: "粘贴效果数据：播放量、转化率、用户反馈、投放成本、渠道效果、复盘结论等。" },
-      { key: "extraNotes", placeholder: "补充信息：当前项目希望复用或规避的内容、客户偏好、风格要求等。" },
-    ],
-  },
+  }])),
 };
 
 function buildMarketingResearchPrompt(moduleName: string, form: MarketingResearchForm) {
-  const moduleOutputMap: Record<string, string> = {
-    竞品分析: `一、竞品营销报告
-- 核心竞品动作
-- 时间节点与效果
-
-二、竞品优劣势分析
-- 优势
-- 劣势
-- 自身差异化建议
-
-三、竞品用户口碑分析
-- 正面评价
-- 负面评价
-- 自身营销避坑与亮点打造
-
-四、竞品营销趋势预判
-- 后续动作预测
-- 自身应对策略`,
-    热点对齐: `一、热点筛选匹配
-- 匹配热点
-- 热度、持续时间、适配场景
-
-二、热点灵感库
-- 3-5个可落地创意点
-- 创意核心、执行思路、预期效果
-
-三、素材库
-- 文案方向
-- 图片思路
-- 短视频脚本框架
-
-四、热点风险提示
-- 潜在风险
-- 规避建议`,
-    舆情分析: `一、负面舆情预警
-- 风险事件
-- 影响范围
-- 官方回应/安抚话术建议
-
-二、舆情趋势分析
-- 趋势判断
-- 变化原因
-- 走向预判
-
-三、舆情总结与建议
-- 核心问题
-- 优先处理动作
-- 后续监测建议`,
-    往期营销内容: `一、过往内容分类整理
-- 类型
-- 场景
-- 节点
-
-二、参考提炼
-- 亮点
-- 不足
-- 可复用点
-- 需规避点
-
-三、内容适配建议
-- 当前项目修改方向
-- 可复用结构/文案/活动玩法
-
-四、数据关联分析
-- 高转化内容特征
-- 用户反馈好的内容形式
-- 当前创作建议`,
-  };
   const formLines = Object.entries(form).map(([key, value]) => `${key}：${value || "未填写"}`).join("\n");
-  return `你是资深游戏营销调研专家，请基于用户投喂的信息生成“${moduleName}”报告。
+  const variableScenario = variableResearchScenarios.find((scenario) => scenario.scene === moduleName);
+  const fixedStructure = fixedResearchModules
+    .map((module, index) => `${index + 1}. ${module.title}
+- 输出物：${module.output}
+- 必答项：
+${module.checklist.map((item) => `  - ${item}`).join("\n")}`)
+    .join("\n\n");
+  const variableStructure = variableScenario
+    ? `增补场景：${variableScenario.scene}
+增补模块：${variableScenario.modules.join(" / ")}
+关键问题：
+${variableScenario.questions.map((item) => `- ${item}`).join("\n")}
+标准输出：${variableScenario.output}`
+    : "";
+
+  return `你是资深游戏营销前期调研专家，请基于用户投喂的信息生成“${moduleName}”。
 
 输出要求：
 1. 必须用中文输出，结构清晰，可直接放入营销策略方案。
 2. 不要编造精确数据；未提供的数据请标注“需补充数据”或“基于输入推断”。
-3. 明确区分事实、推断、建议和风险。
-4. 输出必须可落地，给出具体营销动作或判断依据。
+3. 明确区分事实、推断、风险和行动建议。
+4. 每个结论都要能转化为方案动作、素材方向、风险规避或后续补数需求。
+5. 已有资料充分的部分可标注“已有资料覆盖”，但固定模块不能漏项。
 
 请按以下结构输出：
-${moduleOutputMap[moduleName] || "一、核心结论\n二、详细分析\n三、营销建议\n四、风险与待补充数据"}
+${moduleName === "固定模块整合" ? `一、固定模块调研结论
+${fixedStructure}
+
+二、跨模块关键判断
+- 用户最核心的内容钩子
+- 当前产品最适合放大的卖点
+- 传播触点优先级
+- 必须规避的黑话/文化/舆情雷点
+
+三、下一步执行清单
+- 可直接进入方案的结论
+- 需要补充的数据
+- 推荐优先制作的素材方向` : `一、可变场景调研结论
+${variableStructure}
+
+二、对本次项目的适配判断
+- 是否建议采用该场景打法
+- 用户接受度判断
+- 内容/活动形式建议
+- 风险雷点和规避方式
+
+三、下一步执行清单
+- 需要补充的数据
+- 可直接进入方案的结论
+- 推荐优先制作的素材或动作`}
 
 投喂信息：
 ${formLines}`;
@@ -5639,16 +6993,9 @@ function extractAiText(result: any) {
   );
 }
 
-function MarketingResearch({ addJob }: { addJob: (type: string, name: string, source: string) => void }) {
+function MarketingResearchGenerator({ addJob }: { addJob: (type: string, name: string, source: string) => void }) {
   const [activeModule, setActiveModule] = useState(marketingResearchModules[0].name);
-  const [apiConfig, setApiConfig] = usePersistentState<BriefApiConfig>("strategy-center-marketing-research-api-config", {
-    endpoint: "",
-    apiKey: "",
-    model: "",
-  });
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [modelMessage, setModelMessage] = useState("");
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [apiConfig] = useGlobalAiConfig();
   const [isRunning, setIsRunning] = useState(false);
   const [insightOutput, setInsightOutput] = usePersistentState("strategy-center-target-user-insight-output", "");
   const [researchOutputs, setResearchOutputs] = usePersistentState<Record<string, string>>("strategy-center-marketing-research-outputs", {});
@@ -5682,41 +7029,9 @@ function MarketingResearch({ addJob }: { addJob: (type: string, name: string, so
     }));
   };
 
-  const loadResearchModels = async () => {
-    setIsLoadingModels(true);
-    setModelMessage("");
-    try {
-      if (!inferModelsEndpoint(apiConfig.endpoint)) throw new Error("请先填写接口地址。");
-      const response = await fetch("/api/marketing-research-models", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          endpoint: apiConfig.endpoint,
-          apiKey: apiConfig.apiKey,
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || result.error || "模型列表拉取失败。");
-      const models = Array.isArray(result.data)
-        ? result.data.map((item: { id?: string; name?: string }) => item.id || item.name).filter(Boolean)
-        : Array.isArray(result.models)
-          ? result.models.map((item: string | { id?: string; name?: string }) => (typeof item === "string" ? item : item.id || item.name)).filter(Boolean)
-          : [];
-      if (!models.length) throw new Error("接口返回中没有找到模型列表。");
-      setModelOptions(models);
-      setApiConfig((currentConfig) => ({ ...currentConfig, model: currentConfig.model || models[0] }));
-      setModelMessage(`已拉取 ${models.length} 个模型。`);
-    } catch (error) {
-      setModelOptions([]);
-      setModelMessage(error instanceof Error ? error.message : "模型列表拉取失败。");
-    } finally {
-      setIsLoadingModels(false);
-    }
-  };
-
   const runTargetUserInsight = async () => {
     if (!apiConfig.endpoint.trim()) {
-      setInsightOutput("请先填写目标用户洞察 API 接口地址。");
+      setInsightOutput("系统设置暂未配置全局 AI 接口。请先到系统设置填写，或改用新版营销调研工作台的本地兜底生成。");
       return;
     }
     setIsRunning(true);
@@ -5752,7 +7067,7 @@ function MarketingResearch({ addJob }: { addJob: (type: string, name: string, so
 
   const runMarketingResearch = async () => {
     if (!apiConfig.endpoint.trim()) {
-      setResearchOutputs((currentOutputs) => ({ ...currentOutputs, [current.name]: `请先填写${current.name} API 接口地址。` }));
+      setResearchOutputs((currentOutputs) => ({ ...currentOutputs, [current.name]: "系统设置暂未配置全局 AI 接口。请先到系统设置填写，或改用新版营销调研工作台的本地兜底生成。" }));
       return;
     }
     setIsRunning(true);
@@ -5787,8 +7102,19 @@ function MarketingResearch({ addJob }: { addJob: (type: string, name: string, so
   };
 
   return (
-    <section className="page">
-      <PageTitle title="营销调研" subtitle="沉淀用户、竞品、热点、舆情和往期内容分析，支撑策略方案前置判断。" />
+    <div className="research-ai-panel">
+      <div className="research-ai-intro">
+        <div>
+          <p className="research-report-kicker">AI Research Generator</p>
+          <h3>营销调研生成器</h3>
+          <p>把已有数据、评论、竞品线索和项目要求投喂给模型，生成可直接并入看板的结构化调研结论。</p>
+        </div>
+        <div className="tag-row">
+          <span>事实 / 推断分离</span>
+          <span>支持多模块</span>
+          <span>可复用到方案</span>
+        </div>
+      </div>
       <div className="research-shell">
         <div className="research-nav">
           {marketingResearchModules.map((item) => (
@@ -5812,28 +7138,7 @@ function MarketingResearch({ addJob }: { addJob: (type: string, name: string, so
             <textarea className="research-textarea" value={form.existingData} onChange={(event) => setForm({ ...form, existingData: event.target.value })} placeholder="粘贴已有数据：过往用户调研报告、后台用户数据、留存率、付费率、活跃时段等。" />
             <textarea className="research-textarea" value={form.userComments} onChange={(event) => setForm({ ...form, userComments: event.target.value })} placeholder="粘贴用户评论：应用商店、社交平台、社区论坛、客服反馈等。" />
             <textarea className="research-textarea" value={form.extraNotes} onChange={(event) => setForm({ ...form, extraNotes: event.target.value })} placeholder="补充信息：竞品线索、投放背景、客户特别关注点、禁忌方向等。" />
-            <div className="note-box">
-              <strong>目标用户洞察 API</strong>
-              <p>填写兼容 chat/completions 或 responses 的接口地址；系统会把上面的投喂内容组织成提示词后，由 AI 生成洞察报告。</p>
-              <div className="research-template-grid">
-                <Field label="接口地址" value={apiConfig.endpoint} onChange={(value) => setApiConfig({ ...apiConfig, endpoint: value })} />
-                <label>
-                  <span>API Key</span>
-                  <input type="password" value={apiConfig.apiKey} onChange={(event) => setApiConfig({ ...apiConfig, apiKey: event.target.value })} placeholder="可选，自动放入 Authorization Bearer" />
-                </label>
-                <label>
-                  <span>模型</span>
-                  <select value={apiConfig.model} onChange={(event) => setApiConfig({ ...apiConfig, model: event.target.value })}>
-                    <option value="">先拉取模型列表，或手动填写后保存</option>
-                    {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="inline-actions">
-                <button className="ghost-button" onClick={loadResearchModels} disabled={isLoadingModels}>{isLoadingModels ? "拉取中..." : "拉取模型列表"}</button>
-                {modelMessage && <span>{modelMessage}</span>}
-              </div>
-            </div>
+            <GlobalAiConfigNotice apiConfig={apiConfig} />
             <div className="inline-actions">
               <button className="primary-button" onClick={runTargetUserInsight} disabled={isRunning}>{isRunning ? "生成中..." : "生成目标用户洞察"}</button>
               <span>结果会基于投喂内容生成，并标注事实、推断和需补充数据。</span>
@@ -5855,28 +7160,7 @@ function MarketingResearch({ addJob }: { addJob: (type: string, name: string, so
             {currentFormConfig.textareas.map((field) => (
               <textarea key={field.key} className="research-textarea" value={currentResearchForm[field.key] || ""} onChange={(event) => updateResearchForm(field.key, event.target.value)} placeholder={field.placeholder} />
             ))}
-            <div className="note-box">
-              <strong>{currentFormConfig.apiTitle}</strong>
-              <p>填写兼容 chat/completions 或 responses 的接口地址；系统会把当前模块投喂内容组织成提示词后，由 AI 生成{current.name}报告。</p>
-              <div className="research-template-grid">
-                <Field label="接口地址" value={apiConfig.endpoint} onChange={(value) => setApiConfig({ ...apiConfig, endpoint: value })} />
-                <label>
-                  <span>API Key</span>
-                  <input type="password" value={apiConfig.apiKey} onChange={(event) => setApiConfig({ ...apiConfig, apiKey: event.target.value })} placeholder="可选，自动放入 Authorization Bearer" />
-                </label>
-                <label>
-                  <span>模型</span>
-                  <select value={apiConfig.model} onChange={(event) => setApiConfig({ ...apiConfig, model: event.target.value })}>
-                    <option value="">先拉取模型列表，或手动填写后保存</option>
-                    {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="inline-actions">
-                <button className="ghost-button" onClick={loadResearchModels} disabled={isLoadingModels}>{isLoadingModels ? "拉取中..." : "拉取模型列表"}</button>
-                {modelMessage && <span>{modelMessage}</span>}
-              </div>
-            </div>
+            <GlobalAiConfigNotice apiConfig={apiConfig} />
             <div className="inline-actions">
               <button className="primary-button" onClick={runMarketingResearch} disabled={isRunning}>{isRunning ? "生成中..." : `生成${current.name}`}</button>
               <span>结果会基于投喂内容生成，并标注事实、推断、建议和风险。</span>
@@ -5890,11 +7174,12 @@ function MarketingResearch({ addJob }: { addJob: (type: string, name: string, so
           )}
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 
 function Settings() {
+  const [aiConfig, setAiConfig] = useMigratedGlobalAiConfig();
   const [searchSettings, setSearchSettings] = useState<SearchSettings>({
     mode: "local-semantic",
     embeddingEndpoint: "",
@@ -5902,12 +7187,18 @@ function Settings() {
     embeddingModel: "",
   });
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [aiSettingsMessage, setAiSettingsMessage] = useState("");
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const capabilities = [
+    { name: "后端语言", status: "目标栈", detail: "正式交付按 PHP 7 规划后端服务与接口实现。" },
+    { name: "服务器环境", status: "目标栈", detail: "部署环境按 Linux CentOS + Nginx 规划，数据库使用 MySQL 5.7，缓存、会话和队列使用 Redis。" },
+    { name: "前端语言", status: "目标栈", detail: "正式页面按 HTML5、CSS3、JavaScript、jQuery、Bootstrap 规划前端实现与组件样式。" },
     { name: "数据存储", status: "MVP", detail: "当前使用浏览器 localStorage 保存项目、资料、成员和 AI 任务；后续可替换为后端数据库。" },
     { name: "权限体系", status: "待接入", detail: "用户管理和角色权限仍为占位，试点阶段暂不做登录鉴权。" },
     { name: "文件解析", status: "待接入", detail: "上传资料当前读取表单文本和文件名，暂未解析 PPT、Word、PDF、Excel 正文。" },
     { name: "资料引用", status: "已接入", detail: "项目详情已支持关联资料、查看资料和移除引用。" },
-    { name: "Brief API", status: "已接入", detail: "Brief 解析支持自定义接口、API Key、模型列表拉取和本地规则兜底。" },
+    { name: "全局 AI 配置", status: "已接入", detail: "Brief、营销调研、讲稿输出统一使用系统设置中的接口、API Key 和模型。" },
     { name: "导出能力", status: "部分接入", detail: "项目列表已支持 CSV 导出，后续可补 Brief 报告和方案大纲导出。" },
   ];
 
@@ -5938,9 +7229,71 @@ function Settings() {
     }
   };
 
+  const loadGlobalAiModels = async () => {
+    setIsLoadingModels(true);
+    setAiSettingsMessage("");
+    try {
+      if (!inferModelsEndpoint(aiConfig.endpoint)) throw new Error("请先填写接口地址。");
+      const response = await fetch("/api/brief-models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          endpoint: aiConfig.endpoint,
+          apiKey: aiConfig.apiKey,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || result.error || "模型列表拉取失败。");
+      const models = Array.isArray(result.data)
+        ? result.data.map((item: { id?: string; name?: string }) => item.id || item.name).filter(Boolean)
+        : Array.isArray(result.models)
+          ? result.models.map((item: string | { id?: string; name?: string }) => (typeof item === "string" ? item : item.id || item.name)).filter(Boolean)
+          : [];
+      if (!models.length) throw new Error("接口返回中没有找到模型列表。");
+      setModelOptions(models);
+      setAiConfig((current) => ({ ...current, model: current.model || models[0] }));
+      setAiSettingsMessage(`已拉取 ${models.length} 个模型，配置已自动保存。`);
+    } catch (error) {
+      setModelOptions([]);
+      setAiSettingsMessage(error instanceof Error ? error.message : "模型列表拉取失败。");
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  const saveAiSettings = () => {
+    setAiConfig(aiConfig);
+    setAiSettingsMessage("全局 AI 配置已保存，Brief、营销调研和讲稿输出会自动使用。");
+  };
+
   return (
     <section className="page">
       <PageTitle title="系统设置" subtitle="MVP 阶段包含用户、角色、标签和资料分类维护。" />
+      <Card title="全局 AI 配置">
+        <div className="form-grid">
+          <Field label="接口地址" value={aiConfig.endpoint} onChange={(value) => setAiConfig({ ...aiConfig, endpoint: value })} />
+          <label>
+            <span>API Key</span>
+            <input type="password" value={aiConfig.apiKey} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder="可选，自动放入 Authorization Bearer" />
+          </label>
+          <label>
+            <span>模型</span>
+            <select value={aiConfig.model} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })}>
+              <option value="">手动填写接口后拉取模型，或直接留空</option>
+              {aiConfig.model && !modelOptions.includes(aiConfig.model) && <option value={aiConfig.model}>{aiConfig.model}</option>}
+              {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="inline-actions">
+          <button className="ghost-button" onClick={loadGlobalAiModels} disabled={isLoadingModels}>{isLoadingModels ? "拉取中..." : "拉取模型列表"}</button>
+          <button className="primary-button" onClick={saveAiSettings}>保存全局 AI 配置</button>
+          {aiSettingsMessage && <span>{aiSettingsMessage}</span>}
+        </div>
+        <div className="note-box">
+          <p>配置后，方案 Brief 解析、营销调研、讲稿输出都会直接使用这里的接口。未配置接口时，各页面会自动使用本地规则兜底生成。</p>
+        </div>
+      </Card>
       <Card title="知识库检索方式">
         <div className="form-grid">
           <label>
@@ -6016,11 +7369,23 @@ function Card({ title, children, action }: { title: string; children: React.Reac
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: React.ReactNode; tone: string }) {
-  return (
-    <div className={`metric metric-${tone}`}>
+function Metric({ label, value, tone, onClick }: { label: string; value: React.ReactNode; tone: string; onClick?: () => void }) {
+  const content = (
+    <>
       <span>{label}</span>
       <strong>{value}</strong>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button className={`metric metric-${tone} clickable-metric`} onClick={onClick}>
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className={`metric metric-${tone}`}>
+      {content}
     </div>
   );
 }

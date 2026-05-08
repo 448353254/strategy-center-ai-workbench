@@ -28,6 +28,12 @@ npm run preview
 http://localhost:5173/progress.html
 ```
 
+## 正式交付技术栈
+
+- 后端语言：PHP 7
+- 服务器与环境：Nginx、MySQL 5.7、Redis、Linux 服务器（CentOS）
+- 前端语言：HTML5、CSS3、JavaScript、jQuery、Bootstrap
+
 ## 本地数据
 
 项目、资料、成员、AI 任务、Brief 配置等状态会同步到：

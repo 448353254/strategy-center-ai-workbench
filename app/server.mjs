@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
+import { promisify } from "node:util";
 import formidable from "formidable";
 import mammoth from "mammoth";
 import xlsx from "xlsx";
@@ -11,6 +13,7 @@ const dataDir = join(process.cwd(), "data");
 const dbPath = join(dataDir, "workbench-db.json");
 const distDir = join(process.cwd(), "dist");
 const uploadDir = join(dataDir, "uploads");
+const execFileAsync = promisify(execFile);
 const defaultSearchSettings = {
   mode: "local-semantic",
   embeddingEndpoint: "",
@@ -74,6 +77,13 @@ function inferModelsEndpoint(endpoint) {
   if (!trimmed) return "";
   if (trimmed.endsWith("/models")) return trimmed;
   return trimmed.replace(/\/chat\/completions\/?$/, "").replace(/\/responses\/?$/, "").replace(/\/$/, "") + "/models";
+}
+
+function inferChatCompletionsEndpoint(endpoint) {
+  const trimmed = String(endpoint || "").trim();
+  if (!trimmed) return "";
+  if (/\/(chat\/completions|responses)\/?$/.test(trimmed)) return trimmed;
+  return trimmed.replace(/\/models\/?$/, "").replace(/\/$/, "") + "/chat/completions";
 }
 
 function inferTags(text) {
@@ -277,6 +287,23 @@ async function extractFileContent(file) {
   if (extension === ".docx") {
     const result = await mammoth.extractRawText({ path: filePath });
     return { text: result.value };
+  }
+
+  if (extension === ".pptx") {
+    const { stdout: fileList } = await execFileAsync("unzip", ["-Z1", filePath], { maxBuffer: 1024 * 1024 * 8 });
+    const slideFiles = fileList
+      .split(/\r?\n/)
+      .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+      .sort((left, right) => Number(left.match(/slide(\d+)/)?.[1] || 0) - Number(right.match(/slide(\d+)/)?.[1] || 0));
+    const slides = await Promise.all(slideFiles.map(async (slidePath, index) => {
+      const { stdout } = await execFileAsync("unzip", ["-p", filePath, slidePath], { maxBuffer: 1024 * 1024 * 8 });
+      const text = Array.from(stdout.matchAll(/<a:t>(.*?)<\/a:t>/g))
+        .map((match) => match[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").trim())
+        .filter(Boolean)
+        .join("\n");
+      return text ? `第 ${index + 1} 页\n${text}` : "";
+    }));
+    return { text: slides.filter(Boolean).join("\n\n") };
   }
 
   if ([".xlsx", ".xls"].includes(extension)) {
@@ -612,12 +639,13 @@ async function handleBriefModels(req, res) {
 
 async function handleBriefRun(req, res) {
   const { endpoint, apiKey, model, input, prompt, messages } = await readJson(req);
-  if (!endpoint) {
+  const runEndpoint = inferChatCompletionsEndpoint(endpoint);
+  if (!runEndpoint) {
     sendJson(res, 400, { error: "请先填写接口地址。" });
     return;
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(runEndpoint, {
     method: "POST",
     headers: apiHeaders(apiKey),
     body: JSON.stringify({ model: model || undefined, input, prompt, messages }),
@@ -633,12 +661,13 @@ async function handleBriefRun(req, res) {
 
 async function handleMarketingResearchRun(req, res) {
   const { endpoint, apiKey, model, input, prompt, messages } = await readJson(req);
-  if (!endpoint) {
+  const runEndpoint = inferChatCompletionsEndpoint(endpoint);
+  if (!runEndpoint) {
     sendJson(res, 400, { error: "请先填写接口地址。" });
     return;
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(runEndpoint, {
     method: "POST",
     headers: apiHeaders(apiKey),
     body: JSON.stringify({ model: model || undefined, input, prompt, messages }),
