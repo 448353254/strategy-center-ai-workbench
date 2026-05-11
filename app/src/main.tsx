@@ -117,6 +117,7 @@ interface Resource {
   parseError?: string;
   structuredContent?: SpreadsheetContent;
   chunks?: Array<{ id: string; text: string; embedding?: Record<string, number> }>;
+  erpSource?: { module: string; id: string | number; fileIds?: string; files?: Array<{ id: string | number; filename: string; filepath?: string; filesizecn?: string; parsedContent?: string; parsedSummary?: string }>; auth?: unknown; raw?: unknown };
 }
 
 interface SpreadsheetContent {
@@ -843,14 +844,269 @@ function resourceToInputFile(resource: Resource): BriefInputFile {
   };
 }
 
+const briefBreakdownSections = ["核心需求", "次要需求", "隐性需求", "优先级", "约束条件"] as const;
+type BriefBreakdownSection = typeof briefBreakdownSections[number];
+const briefBreakdownPlaceholders: Record<BriefBreakdownSection, string> = {
+  核心需求: "等待 AI 输出核心需求。",
+  次要需求: "等待 AI 输出次要需求。",
+  隐性需求: "等待 AI 输出隐性需求。",
+  优先级: "等待 AI 输出优先级。",
+  约束条件: "等待 AI 输出约束条件。",
+};
+
+function normalizeBriefHeading(value: string) {
+  const cleaned = value.replace(/^[#\s一二三四五六七八九十0-9、.．:：-]+/, "").replace(/[*_]/g, "").trim();
+  if (/核心/.test(cleaned)) return "核心需求";
+  if (/次要/.test(cleaned)) return "次要需求";
+  if (/隐性|隐藏|潜在/.test(cleaned)) return "隐性需求";
+  if (/优先/.test(cleaned)) return "优先级";
+  if (/约束|限制|禁忌|风险|预算|时间/.test(cleaned)) return "约束条件";
+  return "";
+}
+
+function parseBriefBreakdown(markdown: string): Record<BriefBreakdownSection, string> {
+  const parsed = Object.fromEntries(briefBreakdownSections.map((section) => [section, ""])) as Record<BriefBreakdownSection, string>;
+  if (!markdown.trim()) return parsed;
+  const lines = markdown.split(/\r?\n/);
+  let current: BriefBreakdownSection | "" = "";
+  for (const line of lines) {
+    const heading = normalizeBriefHeading(line);
+    if (heading && briefBreakdownSections.includes(heading as BriefBreakdownSection)) {
+      current = heading as BriefBreakdownSection;
+      continue;
+    }
+    if (current) parsed[current] = parsed[current] + (parsed[current] ? "\n" : "") + line;
+  }
+  if (!Object.values(parsed).some((value) => value.trim())) parsed["核心需求"] = markdown;
+  briefBreakdownSections.forEach((section) => {
+    parsed[section] = parsed[section].trim();
+  });
+  return parsed;
+}
+
+function updateBriefBreakdownSection(markdown: string, section: BriefBreakdownSection, value: string) {
+  const parsed = parseBriefBreakdown(markdown);
+  parsed[section] = value;
+  return briefBreakdownSections.map((item) => "## " + item + "\n" + (parsed[item].trim() || briefBreakdownPlaceholders[item])).join("\n\n");
+}
+
+
+const pureMarkdownOutputRule = "所有 AI 输出必须是纯文字 Markdown 格式：只允许使用标题、短段落和用 - 开头的列表；不要使用 ** 或 * 做加粗/斜体；不要输出多余星号、JSON、表格、开场白或总结套话。";
+
+function cleanAiMarkdown(value: string) {
+  return String(value || "")
+    .replace(/\*\*/g, "")
+    .replace(/(^|\n)\s*\*\s+/g, "$1- ")
+    .replace(/[ \t]+\*(?=[ \t\n。；，,.:：;])/g, "")
+    .replace(/\*([。；，,.:：;])/g, "$1")
+    .trim();
+}
+
+function cleanModuleHeading(item: string) {
+  return item
+    .split(/[：:]/)[0]
+    .replace(/（.*?）/g, "")
+    .replace(/，?例如.+$/, "")
+    .replace(/[。；;]$/, "")
+    .trim();
+}
+
+function parseTitledMarkdown(markdown: string, titles: string[]) {
+  const parsed = Object.fromEntries(titles.map((title) => [title, ""])) as Record<string, string>;
+  if (!markdown.trim()) return parsed;
+  const findTitle = (text: string) => {
+    const normalized = text.replace(/^[#\s一二三四五六七八九十0-9、.．:：-]+/, "").replace(/[*_]/g, "").trim();
+    const matched = titles.find((title) => normalized === title || normalized.startsWith(title) || normalized.includes(title));
+    if (!matched) return { title: "", rest: "" };
+    const index = normalized.indexOf(matched);
+    const rest = normalized.slice(index + matched.length).replace(/^[\s:：｜|、.．-]+/, "").trim();
+    return { title: matched, rest };
+  };
+  let current = "";
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const matched = findTitle(line);
+    if (matched.title) {
+      current = matched.title;
+      if (matched.rest) parsed[current] = parsed[current] + (parsed[current] ? "\n" : "") + matched.rest;
+      continue;
+    }
+    if (current) parsed[current] = parsed[current] + (parsed[current] ? "\n" : "") + rawLine;
+  }
+  if (!Object.values(parsed).some((value) => value.trim())) parsed[titles[0] || ""] = markdown;
+  titles.forEach((title) => {
+    parsed[title] = (parsed[title] || "").trim();
+  });
+  return parsed;
+}
+
+function updateTitledMarkdown(markdown: string, titles: string[], title: string, value: string) {
+  const parsed = parseTitledMarkdown(markdown, titles);
+  parsed[title] = value;
+  return titles.map((item) => "## " + item + "\n" + (parsed[item] || "")).join("\n\n");
+}
+
+function EditableModuleOutput({ titles, value, onChange, placeholderPrefix }: { titles: string[]; value: string; onChange: (next: string) => void; placeholderPrefix: string }) {
+  const parsed = parseTitledMarkdown(value, titles);
+  return (
+    <div className="brief-section-grid module-output-grid">
+      {titles.map((title) => (
+        <section className="brief-section-card" key={title}>
+          <div className="brief-section-head">
+            <strong>{title}</strong>
+          </div>
+          <textarea
+            className="brief-section-editor"
+            value={parsed[title] || ""}
+            onChange={(event) => onChange(updateTitledMarkdown(value, titles, title, event.target.value))}
+            placeholder={placeholderPrefix + title}
+          />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function patternBriefKeyword(value: string) {
+  return /^(P[0-3]|核心|次要|隐性|优先|依据|调研影响|预算|时间|资源|合规|品牌|舆情|风险|待确认|需确认|需补充数据|客户确认|KPI|转化|回流|声量|口碑)$/.test(value);
+}
+
+function splitBriefInlineParts(line: string) {
+  const pattern = /(P[0-3]|核心|次要|隐性|优先|依据|调研影响|预算|时间|资源|合规|品牌|舆情|风险|待确认|需确认|需补充数据|客户确认|KPI|转化|回流|声量|口碑)/g;
+  return line.split(pattern).filter(Boolean);
+}
+
+function BriefMarkdownLine({ line }: { line: string }) {
+  const cleaned = line.replace(/^[-*\d.、\s]+/, "").trim();
+  if (!cleaned) return null;
+  return (
+    <p className="brief-markdown-line">
+      {splitBriefInlineParts(cleaned).map((part, index) => patternBriefKeyword(part) ? <mark key={part + index}>{part}</mark> : <span key={part + index}>{part}</span>)}
+    </p>
+  );
+}
+
+function normalizeExtractedText(value: string) {
+  return String(value || "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "\n")
+    .replace(/[\u200b\ufeff]/g, "")
+    .replace(/[“”„‟]/g, '"')
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isNoisyAttachmentLine(line: string) {
+  const compact = line.replace(/\s+/g, "");
+  if (!compact) return true;
+  if (/^第\d+页$/.test(compact)) return true;
+  if (/^(contents|目录)$/i.test(compact)) return true;
+  if (/^\d{1,3}$/.test(compact)) return true;
+  if (/^0\d$/.test(compact)) return true;
+  if (/^["'“”‘’]+$/.test(compact)) return true;
+  if (/^[\-—_]{3,}$/.test(compact)) return true;
+  return false;
+}
+
+function formatExtractedPreview(value: string) {
+  const lines = normalizeExtractedText(value)
+    .split("\n")
+    .map((line) => line.replace(/^[•●▪◦\-*\d.、\s]+/, "").trim())
+    .filter((line) => line && !isNoisyAttachmentLine(line));
+  const merged: string[] = [];
+  let buffer: string[] = [];
+  const flush = () => {
+    if (!buffer.length) return;
+    merged.push(buffer.join(" ").replace(/\s+/g, " ").trim());
+    buffer = [];
+  };
+  for (const line of lines) {
+    const compact = line.replace(/\s+/g, "");
+    const isHeading = /^([一二三四五六七八九十]+[、.．]|\d+(\.\d+)*[、.．]?|#{1,3}\s+)/.test(line);
+    const isBullet = /^[•●▪◦\-*]/.test(line);
+    const isShort = compact.length <= 8 && !/[。！？；：:]$/.test(line);
+    if (isHeading || isBullet) {
+      flush();
+      merged.push(line);
+      continue;
+    }
+    if (isShort) {
+      buffer.push(line);
+      if (/[。！？；：:]$/.test(line)) flush();
+      continue;
+    }
+    if (buffer.length) flush();
+    merged.push(line);
+  }
+  flush();
+  return merged.slice(0, 120);
+}
+
+function AttachmentSummaryCard({ summary }: { summary: string }) {
+  const lines = cleanAiMarkdown(summary).split(/\n+/).map((line) => line.replace(/^[-•●▪◦\s]+/, "").trim()).filter(Boolean);
+  return (
+    <div className="attachment-summary-card">
+      <strong>关键内容总结</strong>
+      {lines.length ? lines.map((line, index) => <p key={index}>{line}</p>) : <p>附件已读取，但没有生成关键内容总结。</p>}
+    </div>
+  );
+}
+
+function ExtractedAttachmentPreview({ content }: { content: string }) {
+  const lines = formatExtractedPreview(content);
+  if (!lines.length) return null;
+  return (
+    <div className="attachment-readable-preview">
+      {lines.map((line, index) => {
+        const isHeading = /^([一二三四五六七八九十]+[、.．]|\d+(\.\d+)*[、.．]?|#{1,3}\s+)/.test(line) || line.length <= 22;
+        if (isHeading) return <strong key={index}>{line.replace(/^#{1,3}\s*/, "")}</strong>;
+        return <p key={index}>{line}</p>;
+      })}
+    </div>
+  );
+}
+
+const planAnalysisSections = ["方案亮点", "方案缺点与风险", "中标/未中标原因判断", "后续复用建议"];
+
+function EditableBriefBreakdown({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const parsed = parseBriefBreakdown(value);
+  return (
+    <div className="brief-section-grid">
+      {briefBreakdownSections.map((section) => {
+        const content = parsed[section];
+        return (
+          <section className="brief-section-card" key={section}>
+            <div className="brief-section-head">
+              <strong>{section}</strong>
+            </div>
+            <textarea
+              className="brief-section-editor"
+              value={content}
+              onChange={(event) => onChange(updateBriefBreakdownSection(value, section, event.target.value))}
+              placeholder={briefBreakdownPlaceholders[section]}
+            />
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 function buildResourceContext(resources: Resource[]) {
   if (!resources.length) return "未选择资料库文件。";
-  return resources.map((resource, index) => `## 资料库引用 ${index + 1}：${resource.title}
+  return resources.map((resource, index) => {
+    const contentLimit = resource.type === "方案库索引" ? 12000 : 1200;
+    return `## 资料库引用 ${index + 1}：${resource.title}
 类型：${resource.type || "未分类"}
 标签：${resource.tags?.join(" / ") || "无"}
 摘要：${resource.summary || "无"}
 正文摘录：
-${summarize(resource.content || resource.summary || "", 1200)}`).join("\n\n");
+${summarize(resource.content || resource.summary || "", contentLimit)}`;
+  }).join("\n\n");
 }
 
 function scoreResource(resource: Resource, context: string) {
@@ -883,29 +1139,24 @@ function downloadMarkdown(filename: string, title: string, content: string) {
 function buildMarketingBriefPrompt(inputPackage: string) {
   return `你是资深游戏营销前期调研负责人。请以专业策划人员身份拆解本次 Brief，用于后续“跑固定模块、选可变模块、形成输出”的调研工作台。
 
-你必须输出以下结构：
-一、Brief 一句话判断
-- 用一句话说明这次客户真正想解决什么问题。
+你必须只输出 Markdown，且严格使用以下五个二级标题，不要输出表格、JSON、开场白或总结语。${pureMarkdownOutputRule}
 
-二、需求拆解表
-- 核心需求：列出 1-3 条，例如提升游戏转化、强化品牌认知、促进老玩家回流。每条标注优先级 P0/P1/P2、依据、对调研的影响。
-- 次要需求：列出 1-3 条，例如优化用户口碑、拓展年轻用户、提升社群讨论。
-- 隐性需求：列出 1-3 条，例如客户希望方案有创新性、可落地性强、能规避舆情、能讲清 ROI。
+## 核心需求
+- 列出 1-3 条，例如提升游戏转化、强化品牌认知、促进老玩家回流。每条标注优先级 P0/P1/P2、依据、对调研的影响。
 
-三、约束条件
-- 预算限制
-- 时间限制
-- 资源限制
-- 合规/品牌/舆情限制
-- 不确定或需客户确认的信息
+## 次要需求
+- 列出 1-3 条，例如优化用户口碑、拓展年轻用户、提升社群讨论。
 
-四、调研优先级建议
+## 隐性需求
+- 列出 1-3 条，例如客户希望方案有创新性、可落地性强、能规避舆情、能讲清 ROI。
+
+## 优先级
 - 固定模块中哪些必须重点跑，哪些可用已有资料覆盖。
 - 可变模块建议选择哪一个或哪几个场景，原因是什么。
 - 哪些信息会影响后续策略判断，必须优先补齐。
 
-五、下一步执行清单
-- 按“先做什么、用什么资料、输出什么判断”的方式列 5-8 条。
+## 约束条件
+- 预算限制、时间限制、资源限制、合规/品牌/舆情限制、不确定或需客户确认的信息。
 
 规则：
 1. 不要编造客户没有说过的事实；可以标注“基于输入推断”。
@@ -942,44 +1193,32 @@ function buildLocalMarketingBriefBreakdown(form: { projectName: string; gameName
     "提升内容传播效率，形成可复用素材方向",
   ].filter(Boolean);
 
-  return `一、Brief 一句话判断
-- ${form.projectName || form.gameName || "本次项目"}需要围绕“${form.marketingGoal || summarize(combined)}”完成前期调研，先确认用户、产品、文化和竞品底盘，再按“${scenario.scene}”增补场景调研。
-
-二、需求拆解表
-核心需求：
+  return `## 核心需求
 ${(coreNeeds.length ? coreNeeds : ["明确本次营销项目的主目标与转化路径"]).map((item, index) => `- P${index}｜${item}｜依据：${hasConversion || hasBrand ? "Brief/补充信息中出现相关目标词" : "当前输入较少，基于项目类型推断"}｜调研影响：优先决定用户分层、卖点排序和渠道选择。`).join("\n")}
 
-次要需求：
+## 次要需求
 ${secondaryNeeds.slice(0, 3).map((item, index) => `- P${index + 1}｜${item}｜依据：${hasReputation || hasYoung ? "输入中出现口碑/年轻用户/内容平台相关信号" : "营销项目常规配套需求"}。`).join("\n")}
 
-隐性需求：
+## 隐性需求
 - P1｜方案要有创新性，不能只是常规投放堆砌｜依据：营销提案通常需要可讲的新抓手｜调研影响：需要补充黑话文化、热点形式、竞品翻车与成功案例。
 - P1｜方案要可落地，能解释资源、时间和风险｜依据：客户通常会追问执行可行性｜调研影响：必须标注预算、节点、素材、渠道和合规约束。
 - P2｜需要降低舆情和玩家反感风险｜依据：游戏营销容易受社区情绪影响｜调研影响：必须跑禁忌词、敏感话题和竞品翻车案例。
 
-三、约束条件
-- 预算限制：${hasBudget ? "Brief 中出现预算/成本/ROI 线索，需进一步拆具体金额和投放口径。" : "未明确，需客户确认预算区间和报价口径。"}
-- 时间限制：${hasTime ? "Brief 中出现节点/上线/提案等时间线索，需整理关键截止日期。" : "未明确，需客户确认提案、预热、上线和复盘节点。"}
-- 资源限制：需确认可用素材、IP 授权、达人/KOL、渠道资源、线下资源。
-- 合规/品牌/舆情限制：${form.forbidden || "需确认禁忌表达、广告标注、未成年人保护、品牌调性和社群敏感点。"}
-- 待确认信息：核心 KPI、预算、素材授权、审核流程、竞品范围、交付物格式。
-
-四、调研优先级建议
+## 优先级
 - 固定模块重点：用户深度调查、游戏黑话与文化手册、产品自身调研必须先跑；竞品与行业动态用于校准打法风险。
 - 可变模块建议：优先选择“${scenario.scene}”，原因是它最接近当前输入中的营销场景或需求表达。
 - 优先补齐：目标用户证据、转化/KPI 口径、预算与时间节点、禁忌表达、可用素材和渠道资源。
 
-五、下一步执行清单
-1. 整理 Brief 中的明确目标、KPI、时间节点和交付物。
-2. 按用户深度调查模板补用户分层、动机、内容偏好和渠道触点。
-3. 建黑话与文化手册，先标出玩家称谓、梗、禁忌词和敏感话题。
-4. 拆产品卖点和当前版本主题感，形成可传播卖点优先级。
-5. 拉近 3 个月同赛道新品、竞品动作和翻车案例。
-6. 按“${scenario.scene}”补充可变模块问题：${scenario.questions.slice(0, 2).join("；")}。
-7. 把缺失信息整理成客户确认 QA，优先问预算、节点、授权、合规和 KPI。`;
+## 约束条件
+- 预算限制：${hasBudget ? "Brief 中出现预算/成本/ROI 线索，需进一步拆具体金额和投放口径。" : "未明确，需客户确认预算区间和报价口径。"}
+- 时间限制：${hasTime ? "Brief 中出现节点/上线/提案等时间线索，需整理关键截止日期。" : "未明确，需客户确认提案、预热、上线和复盘节点。"}
+- 资源限制：需确认可用素材、IP 授权、达人/KOL、渠道资源、线下资源。
+- 合规/品牌/舆情限制：${form.forbidden || "需确认禁忌表达、广告标注、未成年人保护、品牌调性和社群敏感点。"}
+- 待确认信息：核心 KPI、预算、素材授权、审核流程、竞品范围、交付物格式。`;
 }
 
 function buildFixedModuleAnalysisPrompt(module: StandardResearchModule, briefContext: string, form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }) {
+  const outputHeadings = module.checklist.map(cleanModuleHeading);
   return `你是资深游戏营销前期调研专家。请基于上一步 Brief 拆解结果，对固定模块“${module.title}”进行深度分析。
 
 项目基础信息：
@@ -998,27 +1237,14 @@ ${briefContext || "暂无 Brief 拆解结果，请基于项目基础信息和手
 必分析问题：
 ${module.checklist.map((item) => `- ${item}`).join("\n")}
 
-输出要求：
-1. 不要复述框架说明，要直接生成“本次项目”的分析结论。
-2. 对每个结论标明依据类型：Brief 明确 / 基于输入推断 / 需补充数据。
-3. 结论必须服务本次营销需求，说明对内容、渠道、素材、风险或执行的影响。
-4. 输出要可操作，避免泛泛描述。
-
-请按以下结构输出：
-一、模块核心结论
-- 3-5 条最重要判断
-
-二、逐项深度分析
-- 严格覆盖当前模块的必分析问题
-- 每项包含：结论 / 依据 / 对营销动作的影响 / 需补充数据
-
-三、可直接进入方案的内容
-- 可写进 PPT 的洞察句
-- 可做成素材或活动的方向
-- 需要规避的表达或动作
-
-四、下一步补数清单
-- 列出本模块继续推进前必须补齐的信息`;
+输出格式硬性要求：
+${pureMarkdownOutputRule}
+1. 必须严格按下面这些二级标题输出，每个标题只出现一次，顺序不能变，不能少任何一项：
+${outputHeadings.map((title) => `## ${title}`).join("\n")}
+2. 每个标题下面只写本板块内容，不能把所有内容集中到一个标题里。
+3. 每个板块至少包含：结论、依据类型、对营销动作的影响、需补充数据；没有证据也必须在对应板块写“需补充数据”。
+4. 不要输出“模块核心结论”“逐项深度分析”等额外大标题，不要复述框架说明。
+5. 不要编造事实；可以标注“Brief 明确”“基于输入推断”“需补充数据”。`;
 }
 
 function buildLocalFixedModuleAnalysis(module: StandardResearchModule, briefContext: string, form: { projectName: string; gameName: string; projectType: string; marketingGoal: string; forbidden: string; brief: string }) {
@@ -1054,26 +1280,15 @@ function buildLocalFixedModuleAnalysis(module: StandardResearchModule, briefCont
     ],
   };
   const advice = moduleAdvice[module.title] ?? module.checklist.slice(0, 3);
-  return `一、模块核心结论
-${advice.map((item) => `- ${item}｜依据：基于 Brief 拆解和“${scenario.scene}”场景推断。`).join("\n")}
-
-二、逐项深度分析
-${module.checklist.map((item, index) => `- ${item}
-  结论：需要围绕“${project}”和“${form.marketingGoal || scenario.scene}”补充本项证据，判断它如何影响用户、内容或渠道选择。
-  依据：${briefContext ? "Brief 拆解已提供项目需求上下文" : "当前 Brief 拆解不足，先按项目基础信息推断"}。
-  对营销动作的影响：用于决定素材方向、平台选择、风险规避或执行优先级。
-  需补充数据：评论样本、社区讨论、竞品案例、投放表现或客户确认信息。`).join("\n\n")}
-
-三、可直接进入方案的内容
-- 洞察句：${project} 的前期调研需要先把“用户为什么会被打动”和“什么表达会被反感”讲清楚。
-- 素材/活动方向：围绕“${form.marketingGoal || scenario.scene}”制作 2-3 个内容钩子，并用用户反馈验证。
-- 规避项：不要在没有证据时强行套用泛游戏用户画像，也不要忽略预算、节点、合规和社群敏感点。
-
-四、下一步补数清单
-- 补充玩家评论、社群讨论和平台热门内容样本。
-- 补充客户过往投放类型、效果和禁忌表达。
-- 补充同赛道近 3 个月竞品动作和翻车案例。
-- 补充可用素材、上线节点、预算区间和审核限制。`;
+  return module.checklist.map((item, index) => {
+    const title = cleanModuleHeading(item);
+    const suggestion = advice[index % advice.length] || `围绕“${project}”补充本项证据，判断它如何影响用户、内容或渠道选择。`;
+    return `## ${title}
+- ${suggestion}
+- 依据：${briefContext ? "Brief 拆解已提供项目需求上下文" : "当前 Brief 拆解不足，先按项目基础信息推断"}。
+- 对营销动作的影响：用于决定素材方向、平台选择、风险规避或执行优先级。
+- 需补充数据：评论样本、社区讨论、竞品案例、投放表现或客户确认信息。`;
+  }).join("\n\n");
 }
 
 function inferBriefFieldFromText(text: string, field: "projectName" | "gameName" | "projectType" | "marketingGoal") {
@@ -1131,6 +1346,7 @@ ${scenario.questions.map((item) => `- ${item}`).join("\n")}
 标准输出：${scenario.output}`).join("\n\n")}
 
 输出要求：
+${pureMarkdownOutputRule}
 1. 只分析客户选择的可变模块，不要把全部场景都堆进去。
 2. 每个场景必须结合本次 Brief 需求和前面固定模块结论。
 3. 输出“适配判断、关键证据、建议打法、风险雷点、待补资料、可进入方案的结论”。
@@ -1167,6 +1383,7 @@ ${Object.entries(fixedOutputs).map(([name, output]) => `【${name}】\n${output}
 ${Object.entries(variableOutputs).map(([name, output]) => `【${name}】\n${output}`).join("\n\n") || "暂无"}
 
 请输出以下结构：
+${pureMarkdownOutputRule}
 一、项目需求总览
 二、核心调研结论
 三、固定模块结论
@@ -2687,7 +2904,13 @@ function App() {
   const [peopleInitialDetail, setPeopleInitialDetail] = useState<PeopleDetailView | null>(null);
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const selectedResource = resources.find((resource) => resource.id === selectedResourceId) ?? resources[0];
-  const isAdmin = currentUser?.role === "admin";
+  const legacyUser = currentUser as unknown;
+  const isAdmin = legacyUser === "admin" || currentUser?.role === "admin";
+
+  useEffect(() => {
+    if (legacyUser === "admin") setCurrentUser({ name: "管理员", role: "admin" });
+    if (legacyUser === "user") setCurrentUser({ name: "普通用户", role: "user" });
+  }, [legacyUser, setCurrentUser]);
 
   useEffect(() => {
     setProjects((current) => {
@@ -2745,8 +2968,12 @@ function App() {
   };
 
   const deleteResource = (resourceId: number) => {
-    if (!isAdmin) return;
     const resource = resources.find((item) => item.id === resourceId);
+    if (!isAdmin) {
+      addJob("资料删除失败", "当前账号没有删除权限", "资料库");
+      return;
+    }
+    setSelectedResourceId((current) => (current === resourceId ? resources.find((item) => item.id !== resourceId)?.id ?? 1 : current));
     setResources((current) => current.filter((item) => item.id !== resourceId));
     setProjects((current) =>
       current.map((project) => ({ ...project, resourceIds: (project.resourceIds ?? []).filter((id) => id !== resourceId) })),
@@ -2775,9 +3002,9 @@ function App() {
         {page === "people" && (isAdmin ? <PeopleManagement members={members} setMembers={setMembers} projects={projects} isAdmin={isAdmin} initialDetailView={peopleInitialDetail} clearInitialDetailView={() => setPeopleInitialDetail(null)} openProject={navigateProject} addJob={addJob} /> : <AccessDenied setPage={setPage} />)}
         {page === "marketingResearch" && <MarketingResearchBoard resources={resources} briefOutput={briefOutput} addJob={addJob} />}
         {page === "research" && <MarketingResearchBoard resources={resources} briefOutput={briefOutput} addJob={addJob} />}
-        {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} />}
+        {page === "resources" && <Resources resources={resources} openResource={navigateResource} deleteResource={deleteResource} setPage={setPage} setResources={setResources} />}
         {page === "resourceUpload" && (isAdmin ? <ResourceUpload setResources={setResources} setPage={setPage} addJob={addJob} /> : <AccessDenied setPage={setPage} />)}
-        {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} />}
+        {page === "resourceDetail" && <ResourceDetail resource={selectedResource} deleteResource={deleteResource} setPage={setPage} addJob={addJob} isAdmin={isAdmin} />}
         {page === "script" && <ScriptAssistant resources={resources} addJob={addJob} />}
         {page === "brief" && (
           <SchemeAssistant
@@ -2972,7 +3199,7 @@ function Topbar({
       { id: "page-projects", kind: "页面", title: "项目跟进", meta: "项目列表 / 甘特图", detail: "查看项目状态、负责人、风险和排期。", action: () => setPage("projects") },
       { id: "page-people", kind: "页面", title: "人员管理", meta: "成员 / 负载 / 分工", detail: "查看项目人员分工总表、成员负载和延期任务。", action: () => setPage("people") },
       { id: "page-marketing", kind: "页面", title: "营销调研", meta: "Brief / 固定模块 / 可变模块", detail: "进入游戏营销前期调研工作台。", action: () => setPage("marketingResearch") },
-      { id: "page-brief", kind: "页面", title: "方案助手", meta: "Brief 解析 / PPT 模板", detail: "进入方案助手，生成 Brief 解析、方案大纲和内容检查。", action: () => setPage("brief") },
+      { id: "page-brief", kind: "页面", title: "方案助手", meta: "QA 生成 / PPT 模板", detail: "进入方案助手，生成客户 QA 建议、方案大纲和内容检查。", action: () => setPage("brief") },
       { id: "page-script", kind: "页面", title: "讲稿输出", meta: "逐字稿 / 答辩物料", detail: "根据方案 PPT 和资料库生成宣讲稿。", action: () => setPage("script") },
       { id: "page-resources", kind: "页面", title: "资料库", meta: "历史方案 / 竞品资料 / 复盘", detail: "检索、上传和复用策略资产。", action: () => setPage("resources") },
       { id: "page-ai", kind: "页面", title: "AI 任务记录", meta: "生成记录", detail: "查看 AI 解析、生成、排期任务。", action: () => setPage("aiJobs") },
@@ -4033,6 +4260,7 @@ function ProjectDetail({ project, initialTab, members, projects, resources, open
   );
 }
 
+
 type ResourceSearchMode = "natural" | "recommend" | "similar";
 type ResourceSearchResult = {
   resource: Resource;
@@ -4044,7 +4272,7 @@ type ResourceSearchResult = {
   recommendation?: string;
 };
 
-function Resources({ resources, openResource, deleteResource, setPage }: { resources: Resource[]; openResource: (id: number) => void; deleteResource: (id: number) => void; setPage: (page: Page) => void }) {
+function Resources({ resources, openResource, deleteResource, setPage, setResources }: { resources: Resource[]; openResource: (id: number) => void; deleteResource: (id: number) => void; setPage: (page: Page) => void; setResources: React.Dispatch<React.SetStateAction<Resource[]>> }) {
   const [mode, setMode] = useState<ResourceSearchMode>("natural");
   const [query, setQuery] = useState("");
   const [context, setContext] = useState("");
@@ -4055,7 +4283,9 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
   });
   const [searchResults, setSearchResults] = useState<ResourceSearchResult[]>([]);
   const [searchMessage, setSearchMessage] = useState("");
-  const [erpMessage, setErpMessage] = useState("ERP 资料库接口已预留，等待配置真实 ERP API。");
+  const [erpMessage, setErpMessage] = useState("方案收集库接口已接入，由后端托管 ERP 登录态并同步资料。");
+  const [isSyncingErp, setIsSyncingErp] = useState(false);
+  const [isCheckingErp, setIsCheckingErp] = useState(false);
   const effectiveQuery = mode === "natural" ? query : context || query;
 
   const localResults = useMemo(() => {
@@ -4123,13 +4353,45 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
     },
   } satisfies Record<ResourceSearchMode, { title: string; placeholder: string; helper: string }>;
 
-  const checkErp = async () => {
+  const mergeErpResources = (incoming: Resource[]) => {
+    setResources((current) => {
+      const nextById = new Map(current.map((resource) => [resource.id, resource]));
+      incoming.forEach((resource) => nextById.set(resource.id, resource));
+      return Array.from(nextById.values()).sort((left, right) => String(right.uploadedAt || "").localeCompare(String(left.uploadedAt || "")));
+    });
+  };
+
+  const checkErpStatus = async () => {
+    setIsCheckingErp(true);
     try {
-      const response = await fetch("/api/erp/resources");
+      const response = await fetch("/api/erp/status");
       const data = await response.json();
-      setErpMessage(data.message || "ERP 接口已预留。");
-    } catch {
-      setErpMessage("ERP 接口暂不可用，请确认本地后端服务。");
+      if (!response.ok) throw new Error(data.error || "ERP 后端状态检查失败。");
+      setErpMessage(data.message || "ERP 后端状态已检查。");
+    } catch (error) {
+      setErpMessage(error instanceof Error ? error.message : "ERP 后端状态检查失败。");
+    } finally {
+      setIsCheckingErp(false);
+    }
+  };
+
+
+  const syncErp = async () => {
+    setIsSyncingErp(true);
+    try {
+      const response = await fetch("/api/erp/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ page: 1, pageSize: 50, all: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "方案收集库同步失败。");
+      mergeErpResources(data.resources || []);
+      setErpMessage(data.message || `已同步方案收集库 ${data.synced || 0} 条记录。`);
+    } catch (error) {
+      setErpMessage(error instanceof Error ? error.message : "方案收集库同步失败，请确认 ERP 登录态。");
+    } finally {
+      setIsSyncingErp(false);
     }
   };
 
@@ -4153,10 +4415,13 @@ function Resources({ resources, openResource, deleteResource, setPage }: { resou
         )}
         <div className="erp-connector">
           <div>
-            <strong>ERP 资料库接口</strong>
+            <strong>方案收集库</strong>
             <span>{erpMessage}</span>
           </div>
-          <button className="ghost-button" onClick={checkErp}>检查接口</button>
+          <div className="card-actions">
+            <button className="ghost-button" onClick={checkErpStatus} disabled={isCheckingErp}>{isCheckingErp ? "检查中..." : "检查后端 ERP"}</button>
+            <button className="primary-button" onClick={syncErp} disabled={isSyncingErp}>{isSyncingErp ? "同步中..." : "同步方案收集库"}</button>
+          </div>
         </div>
       </div>
       <div className="filter-bar">
@@ -4361,23 +4626,140 @@ function ResourceUpload({ setResources, setPage, addJob }: { setResources: React
   );
 }
 
-function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resource: Resource; deleteResource: (id: number) => void; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void }) {
-  const [advice, setAdvice] = useState("");
+function buildPlanAnalysisPrompt(resource: Resource, attachmentText = "") {
+  const raw = (resource.erpSource?.raw || {}) as Record<string, unknown>;
+  const files = resource.erpSource?.files?.map((file) => file.filename).filter(Boolean).join(" / ") || resource.fileName || "无";
+  return [
+    "你是资深游戏营销方案复盘分析专家。请基于单个历史方案资料，判断方案为什么可能中标或未中标，并沉淀可复用经验。",
+    pureMarkdownOutputRule,
+    "输出结构必须包含以下四个二级标题：",
+    "## 方案亮点",
+    "## 方案缺点与风险",
+    "## 中标/未中标原因判断",
+    "## 后续复用建议",
+    "每个标题下用 - 开头的列表输出 3-5 条，必须结合中标情况、客户反馈、营销标的、产品、附件名称和正文信息；信息不足时标注为基于现有资料推断。",
+    "",
+    "方案资料：",
+    `标题：${resource.title}`,
+    `资料类型：${resource.type}`,
+    `中标情况：${raw.bid_status || resource.type || "未填写"}`,
+    `客户名称：${raw.custname || "未填写"}`,
+    `营销标的：${raw.product || "未填写"}`,
+    `产品：${raw.ordertype || "未填写"}`,
+    `方案提交时间：${raw.plan_time || resource.uploadedAt || "未填写"}`,
+    `创建人：${raw.cuname || raw.optname || resource.uploader || "未填写"}`,
+    `客户反馈：${raw.custfeed || resource.summary || "无"}`,
+    `附件：${files}`,
+    "",
+    "正文：",
+    summarize(resource.content || resource.summary || "", 4000),
+    "",
+    "附件解析正文：",
+    attachmentText ? summarize(attachmentText, 8000) : "暂未读取附件正文，请基于已同步字段分析；如果附件是核心方案，请提示需要先读取附件。",
+  ].join("\n");
+}
+
+function buildLocalPlanAnalysis(resource: Resource) {
+  const raw = (resource.erpSource?.raw || {}) as Record<string, unknown>;
+  const bidStatus = String(raw.bid_status || resource.type || "未填写");
+  const isWon = /中标|已中标/.test(bidStatus);
+  const feedback = String(raw.custfeed || resource.summary || "暂无明确客户反馈");
+  const product = String(raw.product || "该营销标的");
+  const orderType = String(raw.ordertype || "对应产品");
+  const files = resource.erpSource?.files?.map((file) => file.filename).filter(Boolean).join(" / ") || resource.fileName || "暂无附件信息";
+  return cleanAiMarkdown(`## 方案亮点
+- 围绕 ${product} 和 ${orderType} 形成了可识别的项目线索，便于后续复盘同类需求。
+- 方案资料保留了客户、提交时间、创建人、附件等关键信息，适合沉淀为历史案例。
+- 客户反馈显示：${feedback}，可作为判断客户关注点和方案有效性的主要依据。
+- 附件信息为：${files}，后续可结合原文件继续提炼视觉、结构和报价层面的亮点。
+
+## 方案缺点与风险
+- 当前资料正文偏摘要化，如果不打开附件，创意机制、执行路径和效果数据的证据链仍然不足。
+- 客户反馈信息有限时，容易把中标或未中标原因归因过度，需要结合投标过程、报价和竞品情况复核。
+- 若仅复用标题或附件方向，可能忽略该客户当时的预算、节点和资源条件。
+- 对外复用前需要检查客户名称、合同金额、CRM 单号等内部信息是否需要脱敏。
+
+## 中标/未中标原因判断
+- 当前中标情况：${bidStatus}。
+- ${isWon ? "从结果看，该方案可能在客户需求匹配、提案完整度或执行确定性上具备优势。" : "从结果看，该方案需要重点复盘需求匹配、报价、创意差异化或客户反馈中的阻塞点。"}
+- 客户反馈是最直接的判断依据：${feedback}。
+- 以上判断基于现有资料推断，建议结合附件正文和投标沟通记录进一步确认。
+
+## 后续复用建议
+- 复用前先提取客户类型、营销标的、核心玩法和交付物结构，不要直接照搬旧方案。
+- 同类项目可优先参考该方案的选题方向、附件组织方式和客户反馈处理方式。
+- 若用于新提案，需要补充当前项目的用户洞察、传播渠道、预算拆分和效果预估。
+- 建议把这份方案和同客户、同产品、同营销标的的其他方案放在一起横向比较。`);
+}
+
+function ResourceDetail({ resource, deleteResource, setPage, addJob, isAdmin }: { resource: Resource; deleteResource: (id: number) => void; setPage: (page: Page) => void; addJob: (type: string, name: string, source: string) => void; isAdmin: boolean }) {
+  const [analysis, setAnalysis] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [attachmentContents, setAttachmentContents] = useState<Record<string, string>>({});
+  const [attachmentSummaries, setAttachmentSummaries] = useState<Record<string, string>>({});
+  const [readingFileId, setReadingFileId] = useState<string | number | null>(null);
+  const [apiConfig] = useGlobalAiConfig();
   const spreadsheet = spreadsheetFromResource(resource);
+  const raw = (resource.erpSource?.raw || {}) as Record<string, unknown>;
+  const attachmentText = Object.entries(attachmentContents).map(([fileId, content]) => `附件 ${fileId}\n${content}`).join("\n\n");
 
-  const generateAdvice = () => {
-    setAdvice(`适用场景：${resource.tags.join("、")}相关项目。
+  const attachmentUrl = (fileId: string | number) => `/api/erp/attachment?planId=${encodeURIComponent(String(resource.erpSource?.id || resource.id))}&fileId=${encodeURIComponent(String(fileId))}`;
 
-可复用点：
-1. 可复用资料中的核心结构和表达方式。
-2. 可提取其中的策略论证、文案方向或风险提示。
-3. 可作为方案大纲、客户沟通或内部评审的参考材料。
+  const readAttachment = async (file: { id: string | number; filename: string }) => {
+    setReadingFileId(file.id);
+    try {
+      const response = await fetch(`/api/erp/attachment/read?planId=${encodeURIComponent(String(resource.erpSource?.id || resource.id))}&fileId=${encodeURIComponent(String(file.id))}`, { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "附件读取失败。");
+      const content = normalizeExtractedText(cleanAiMarkdown(result.content || ""));
+      const summary = cleanAiMarkdown(result.summary || "");
+      setAttachmentContents((current) => ({ ...current, [String(file.id)]: content || summary || "附件已读取，但没有解析出文字内容。" }));
+      setAttachmentSummaries((current) => ({ ...current, [String(file.id)]: summary || summarize(content, 420) || "附件已读取，但没有生成关键内容总结。" }));
+      addJob("附件总结", file.filename, "资料详情");
+    } catch (error) {
+      const message = `读取失败：${error instanceof Error ? error.message : "附件读取失败"}`;
+      setAttachmentContents((current) => ({ ...current, [String(file.id)]: message }));
+      setAttachmentSummaries((current) => ({ ...current, [String(file.id)]: message }));
+    } finally {
+      setReadingFileId(null);
+    }
+  };
 
-使用建议：
-1. 替换为当前游戏卖点、客户资源和执行周期。
-2. 涉及客户、报价、竞品和内部复盘的信息需人工确认后再外发。
-3. 如果用于投标方案，建议补充当前项目的数据支撑。`);
-    addJob("复用建议", resource.title, "资料详情");
+  const analyzePlan = async () => {
+    setIsAnalyzing(true);
+    const prompt = buildPlanAnalysisPrompt(resource, attachmentText);
+    try {
+      if (apiConfig.endpoint.trim()) {
+        setAnalysis("正在调用 AI 分析方案内容...");
+        const response = await fetch("/api/marketing-research-run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: apiConfig.endpoint.trim(),
+            apiKey: apiConfig.apiKey.trim(),
+            model: apiConfig.model.trim() || undefined,
+            input: { resource, attachmentText },
+            prompt,
+            messages: [
+              { role: "system", content: "你是资深游戏营销方案复盘分析专家，擅长根据中标情况和客户反馈提炼方案亮点、缺点和复用建议。" },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || result.error || "方案分析 API 调用失败。");
+        setAnalysis(extractAiText(result) || buildLocalPlanAnalysis(resource));
+      } else {
+        setAnalysis(buildLocalPlanAnalysis(resource));
+      }
+      addJob("方案分析", resource.title, "资料详情");
+    } catch (error) {
+      setAnalysis(`分析失败：${error instanceof Error ? error.message : "方案分析失败"}
+
+${buildLocalPlanAnalysis(resource)}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   return (
@@ -4385,7 +4767,7 @@ function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resourc
       <PageTitle
         title={resource.title}
         subtitle={`${resource.type} / 上传人：${resource.uploader} / 敏感等级：${resource.sensitive}`}
-        action={<div className="card-actions"><button className="ghost-button" onClick={() => setPage("resources")}>返回资料库</button><button className="link-button danger" onClick={() => deleteResource(resource.id)}>删除资料</button><button className="primary-button" onClick={generateAdvice}>生成复用建议</button></div>}
+        action={<div className="card-actions"><button className="ghost-button" onClick={() => setPage("resources")}>返回资料库</button><button className="link-button danger" onClick={() => deleteResource(resource.id)} disabled={!isAdmin}>{isAdmin ? "删除资料" : "无权限删除"}</button><button className="primary-button" onClick={analyzePlan} disabled={isAnalyzing}>{isAnalyzing ? "分析中..." : "AI 分析方案"}</button></div>}
       />
       <div className="split-panel large-left">
         <Card title="文件预览">
@@ -4394,21 +4776,42 @@ function ResourceDetail({ resource, deleteResource, setPage, addJob }: { resourc
               <h2>{resource.title}</h2>
               <p>{resource.summary}</p>
               <p>{resource.content}</p>
-              <div className="preview-lines" />
+              {resource.erpSource?.files?.length ? (
+                <div className="erp-file-list">
+                  <strong>方案附件</strong>
+                  {resource.erpSource.files.map((file) => (
+                    <div className="erp-file-item" key={file.id}>
+                      <span className="erp-file-name">
+                        {String(file.filename || "方案附件")}{file.filesizecn ? `（${String(file.filesizecn)}）` : ""}
+                      </span>
+                      <a className="link-button" href={attachmentUrl(file.id)} download>下载附件</a>
+                      <button className="link-button" onClick={() => readAttachment({ id: file.id, filename: file.filename || "方案附件" })} disabled={readingFileId === file.id}>{readingFileId === file.id ? "总结中..." : "AI 总结附件"}</button>
+                      {attachmentSummaries[String(file.id)] ? <AttachmentSummaryCard summary={attachmentSummaries[String(file.id)]} /> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
         </Card>
-        <Card title="AI 摘要与标签">
+        <Card title="方案分析">
           <Info label="解析状态" value={resource.parseStatus || "成功"} />
           <Info label="文件名" value={resource.fileName || "-"} />
           <Info label="文件大小" value={formatFileSize(resource.fileSize)} />
+          {resource.erpSource && <Info label="ERP 来源" value={`方案收集库 #${resource.erpSource.id}`} />}
+          {resource.erpSource?.raw ? <Info label="客户" value={String(raw.custname || "-")} /> : null}
+          {resource.erpSource?.raw ? <Info label="中标情况" value={String(raw.bid_status || "-")} /> : null}
+          {resource.erpSource?.raw ? <Info label="客户反馈" value={String(raw.custfeed || "-")} /> : null}
           {resource.parseError && <div className="note-box"><strong>解析提示</strong><p>{resource.parseError}</p></div>}
           <hr />
-          <p className="muted">{resource.summary}</p>
           <div className="tag-row">{resource.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
           <hr />
-          <h3>复用建议</h3>
-          <p className="muted">{advice || "点击“生成复用建议”后，AI 将输出适用场景、可复用结构和风险提示。"}</p>
+          <EditableModuleOutput
+            titles={planAnalysisSections}
+            value={analysis}
+            onChange={setAnalysis}
+            placeholderPrefix="可先读取附件内容，再点击 AI 分析方案。这里填写"
+          />
         </Card>
       </div>
     </section>
@@ -4531,9 +4934,9 @@ function SchemeAssistant({
 }) {
   return (
     <section className="page">
-      <PageTitle title="方案助手" subtitle="把客户 Brief 解析、PPT 模板生成和内容检查收拢到同一个方案工作流。" />
+      <PageTitle title="方案助手" subtitle="把客户输入文件、历史 QA 检索、PPT 模板生成和内容检查收拢到同一个方案工作流。" />
       <div className="tabs assistant-tabs">
-        <button className={`tab ${activeTab === "brief" ? "active" : ""}`} onClick={() => setActiveTab("brief")}>Brief 解析</button>
+        <button className={`tab ${activeTab === "brief" ? "active" : ""}`} onClick={() => setActiveTab("brief")}>QA 生成</button>
         <button className={`tab ${activeTab === "outline" ? "active" : ""}`} onClick={() => setActiveTab("outline")}>大纲生成</button>
         <button className={`tab ${activeTab === "template" ? "active" : ""}`} onClick={() => setActiveTab("template")}>生成 PPT 模板</button>
       </div>
@@ -4619,7 +5022,7 @@ function BriefAssistant({
       });
       return next;
     });
-    setFileMessage("已加入文件，点击解析文件后会读取正文。");
+    setFileMessage("已加入文件，点击解析文件后会读取正文并用于 QA 生成。");
   };
 
   const removeBriefFile = (index: number) => {
@@ -4628,7 +5031,7 @@ function BriefAssistant({
 
   const parseBriefFiles = async () => {
     if (!selectedFiles.length) {
-      setFileMessage("请先选择客户 Brief、QA 或补充资料文件。");
+      setFileMessage("请先选择客户 Brief、历史 QA、答疑或补充资料文件。");
       return parsedFiles;
     }
     setIsParsingFiles(true);
@@ -4661,7 +5064,7 @@ function BriefAssistant({
       })) as BriefInputFile[];
       setParsedFiles(files);
       setFileMessage(`已解析 ${files.length} 个输入文件。`);
-      addJob("Brief 文件解析", `解析 ${files.length} 个客户输入文件`, "方案助手");
+      addJob("QA 文件解析", `解析 ${files.length} 个客户输入文件`, "方案助手");
       return files;
     } catch (error) {
       setFileMessage(error instanceof Error ? error.message : "Brief 输入文件解析失败。");
@@ -4677,23 +5080,16 @@ function BriefAssistant({
       const inputFiles = selectedFiles.length && !parsedFiles.length ? await parseBriefFiles() : parsedFiles;
       const inputPackage = buildCurrentInputPackage(form, inputFiles);
       const liveReferenceContext = buildBriefReferenceContext(form, projects, resources, inputPackage);
-      const systemPrompt = `你是游戏营销策略中心的 Brief 解析专家。请基于系统设定流程分析“本次项目输入包”，输入包可能包含客户下发 Brief、QA/答疑、补充资料、附件要求、历史沟通记录。
-
-输出时必须：
-1. 区分客户明确要求、AI 推断、历史参照启发、需要人工确认的信息。
-2. 先综合本次上传文件，再结合历史参照文件，不要只复述单个文件。
-3. 自动识别需求背景、目标、预算、节点、考核标准、排竞/保密、交付物、风险与缺失信息。
-4. 输出客户确认 QA，优先覆盖预算、资源授权、排竞、素材、KOL/达人、效果预估、提交附件和时间节点。
-5. 如历史中标/高复用案例可参考，只提炼结构和策略方法，不把旧项目数据当成当前事实。`;
-      const prompt = `${systemPrompt}
-
-${inputPackage}
-
-请同时参考以下系统自动检索到的历史资料，分析相似需求、历史 QA/答疑、中标或高复用案例，并明确哪些结论来自历史资料、哪些需要人工确认。
-
-${liveReferenceContext.text}`;
+      const systemPrompt = [
+        "你是游戏营销提案前期 QA 生成专家。请基于本次客户 Brief、历史 QA/答疑、补充资料和中标案例，生成本次需要向客户确认的问题清单。",
+        pureMarkdownOutputRule,
+        "输出必须按以下模块组织：## 项目基础信息 QA、## 预算与报价 QA、## 资源与素材 QA、## 投放与效果 QA、## 执行交付 QA、## 风险与限制 QA。",
+        "每个模块输出 3-6 条问题；每条问题必须是可直接发给客户确认的问句，并补一句：为什么要问。",
+        "明确哪些问题来自本次 Brief 缺口，哪些来自历史 QA 高频问题或历史案例启发。",
+      ].join("\n");
+      const prompt = [systemPrompt, "本次项目输入包：", inputPackage, "历史 QA 检索与相关案例：", liveReferenceContext.text].join("\n\n");
       if (apiConfig.endpoint.trim()) {
-        setBriefOutput("正在调用 Brief 解析 API...");
+        setBriefOutput("正在调用 AI 生成 QA 建议...");
         const response = await fetch("/api/brief-run", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -4701,7 +5097,7 @@ ${liveReferenceContext.text}`;
             endpoint: apiConfig.endpoint.trim(),
             apiKey: apiConfig.apiKey.trim(),
             model: apiConfig.model.trim() || undefined,
-            input: form,
+            input: { ...form, files: inputFiles.map((file) => ({ name: file.name, summary: file.summary, content: file.content })) },
             prompt,
             messages: [
               { role: "system", content: systemPrompt },
@@ -4710,25 +5106,47 @@ ${liveReferenceContext.text}`;
           }),
         });
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error?.message || result.error || "Brief 解析 API 调用失败。");
-        const output = result.output || result.report || result.content || result.choices?.[0]?.message?.content;
-        setBriefOutput(output || JSON.stringify(result, null, 2));
-        addJob("Brief 解析", `${form.projectName || "未命名项目"} Brief API 需求解构`, "方案助手");
+        if (!response.ok) throw new Error(result.error?.message || result.error || "QA 生成 API 调用失败。");
+        const output = extractAiText(result) || result.output || result.report || result.content || result.choices?.[0]?.message?.content;
+        setBriefOutput(output || cleanAiMarkdown(JSON.stringify(result, null, 2)));
+        addJob("QA 生成", (form.projectName || "未命名项目") + " QA 建议", "方案助手");
         return;
       }
-      setBriefOutput(`${buildBriefReportWithReferences(form, liveReferenceContext.text)}
-
-本次上传文件综合：
-${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name, file.content)}：${file.name}；${file.summary}`).join("\n") : "- 暂无上传文件，请先上传客户 Brief、QA 或补充资料。"}
-
-客户确认 QA 优先级：
-1. 预算拆分、报价口径、权益明细和效果预估是否已有固定模板？
-2. 是否存在排竞、保密、IP/明星/异业资源使用限制？
-3. 提案附件是否必须包含 PPT、费用表、成功案例、执行排期和数据支撑？
-4. QA/补充资料中未明确的节点、素材、达人范围和审批流程是否需要客户确认？`);
-      addJob("Brief 解析", `${form.projectName || "未命名项目"} Brief 本地需求与历史资料分析`, "方案助手");
+      const uploadedSummary = inputFiles.length ? inputFiles.map((file) => "- " + classifyBriefFile(file.name, file.content) + "：" + file.name + "；" + file.summary).join("\n") : "- 暂无上传文件，请先上传客户 Brief、QA 或补充资料。";
+      setBriefOutput([
+        "## 项目基础信息 QA",
+        "- 本次项目最终名称、游戏名称、项目类型和提案用途分别是什么？为什么要问：这些信息会影响方案标题、案例匹配和后续模板生成。",
+        "- 本次方案的核心目标是用户增长、回流、品牌声量、销售转化还是节点曝光？为什么要问：目标不同会影响调研侧重点和效果指标。",
+        "",
+        "## 预算与报价 QA",
+        "- 本次预算范围、报价口径和费用表格式是否已有固定要求？为什么要问：会影响资源组合、达人层级和报价附件。",
+        "- 是否需要拆分媒介、内容制作、达人投放、执行服务等费用？为什么要问：会影响方案可落地性和客户审批。",
+        "",
+        "## 资源与素材 QA",
+        "- 客户可提供哪些游戏素材、角色资产、PV、实机录屏或授权素材？为什么要问：会影响内容创意和素材制作周期。",
+        "- 是否存在 IP、明星、联动资源、平台资源或排竞限制？为什么要问：会影响传播创意边界和风险控制。",
+        "",
+        "## 投放与效果 QA",
+        "- 客户希望重点覆盖哪些平台、圈层和达人类型？为什么要问：会影响投放渠道、KOL 选择和预算分配。",
+        "- 本次效果预估需要使用哪些指标，如曝光、CPM、互动、预约、转化或口碑？为什么要问：会影响效果模型和案例对标。",
+        "",
+        "## 执行交付 QA",
+        "- 提案必须包含哪些附件，如 PPT、报价单、排期表、成功案例或执行 SOP？为什么要问：会影响交付清单和内部分工。",
+        "- 最终提交、讲标、定稿和上线节点分别是什么？为什么要问：会影响排期倒推和方案颗粒度。",
+        "",
+        "## 风险与限制 QA",
+        "- 是否有禁用表达、敏感话题、负面舆情或合规限制？为什么要问：会影响内容安全和审核路径。",
+        "- 历史 QA/答疑中高频出现的问题是否需要本次提前确认？为什么要问：可减少反复沟通和返工。",
+        "",
+        "## 历史 QA 检索依据",
+        liveReferenceContext.text,
+        "",
+        "## 本次上传文件综合",
+        uploadedSummary,
+      ].join("\n"));
+      addJob("QA 生成", (form.projectName || "未命名项目") + " 本地 QA 建议", "方案助手");
     } catch (error) {
-      setBriefOutput(error instanceof Error ? error.message : "Brief 解析 API 调用失败。");
+      setBriefOutput(error instanceof Error ? error.message : "QA 生成 API 调用失败。");
     } finally {
       setIsRunning(false);
     }
@@ -4736,10 +5154,11 @@ ${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name,
 
   return (
     <section className={embedded ? "assistant-subpage" : "page"}>
-      {!embedded && <PageTitle title="Brief 解析" subtitle="上传或粘贴客户 Brief，生成需求解构和 QA 清单。" />}
-      {embedded && <div className="subpage-heading"><strong>Brief 解析</strong><span>上传或粘贴客户 Brief，生成需求解构和 QA 清单。</span></div>}
+      {!embedded && <PageTitle title="QA 生成" subtitle="上传客户 Brief、QA 或补充资料，检索历史 QA，并生成本次客户确认问题建议。" />}
+      {embedded && <div className="subpage-heading"><strong>QA 生成</strong><span>上传客户 Brief、QA 或补充资料，检索历史 QA，并生成本次客户确认问题建议。</span></div>}
       <div className="split-panel">
-        <Card title="输入信息">
+        <div className="stack-panel">
+          <Card title="输入信息">
           <div className="brief-file-panel">
             <label className="upload-zone compact-upload">
               <strong>上传本次项目输入文件</strong>
@@ -4774,32 +5193,32 @@ ${inputFiles.length ? inputFiles.map((file) => `- ${classifyBriefFile(file.name,
             )}
           </div>
           <GlobalAiConfigNotice apiConfig={apiConfig} />
-          <button className="primary-button wide" onClick={run} disabled={isRunning}>{isRunning ? "解析中..." : "开始解析"}</button>
-        </Card>
-        <div className="stack-panel">
-          <Card title="历史参照检索" action={<span className="soft-pill">自动匹配</span>}>
+          <button className="primary-button wide" onClick={run} disabled={isRunning}>{isRunning ? "生成中..." : "AI 生成 QA 建议"}</button>
+          </Card>
+          <Card title="历史 QA 检索" action={<span className="soft-pill">自动匹配</span>}>
             <div className="reference-grid">
-              <ReferenceColumn title="相似历史需求" items={referenceContext.historicalBriefs.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: resource.summary }))} />
               <ReferenceColumn title="历史 QA / 答疑" items={referenceContext.qaItems.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: summarize(resource.content || resource.summary) }))} />
-              <ReferenceColumn title="中标/高复用案例" items={referenceContext.winningCases.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: resource.summary }))} />
+              <ReferenceColumn title="相关中标 / 高复用案例" items={referenceContext.winningCases.map(({ resource, score }) => ({ title: resource.title, meta: `${resource.type} / 匹配 ${score}`, summary: resource.summary }))} />
             </div>
             <div className="reference-projects">
-              <strong>相关项目经验</strong>
+              <strong>相关项目 QA 经验</strong>
               {referenceContext.relatedProjects.length ? referenceContext.relatedProjects.map(({ project, score }) => (
                 <span key={project.id}>{project.name} / {project.stage} / 风险 {inferProjectRisk(project)} / 匹配 {score}</span>
               )) : <span>暂无匹配项目</span>}
             </div>
           </Card>
+        </div>
+        <div className="stack-panel">
+
           <Card
-            title="AI 需求解构报告"
+            title="AI QA 建议"
             action={
               <div className="card-actions">
                 <button className="ghost-button" onClick={() => openOutline("template")}>生成模板</button>
-                <button className="ghost-button audit-entry-button" onClick={() => openOutline("audit")}>内容检查入口</button>
               </div>
             }
           >
-            <pre className="ai-output">{briefOutput || "上传并解析 Brief / QA / 补充资料后，AI 将自动识别项目基础信息、核心需求、约束条件、风险点和客户确认 QA，并结合历史需求、QA 答疑和中标案例输出需求解构报告。"}</pre>
+            <pre className="ai-output">{briefOutput || "上传并解析 Brief / QA / 补充资料后，AI 会结合历史 QA、答疑和中标案例，输出本次需要向客户确认的问题建议。"}</pre>
           </Card>
         </div>
       </div>
@@ -4845,8 +5264,8 @@ function SchemeOutlineAssistant({
   const runOutline = () => {
     const result = `一、方案方向判断
 - 本次方案方向：${form.direction || "需补充方向"}。
-- 核心主题 / 主张：${form.theme || "建议根据 Brief 解析报告提炼一个清晰主张。"}
-- 目标对象：${form.audience || "优先从 Brief 解析报告中的客户目标和玩家分层推断。"}
+- 核心主题 / 主张：${form.theme || "建议根据 QA 建议和客户输入提炼一个清晰主张。"}
+- 目标对象：${form.audience || "优先从 QA 建议中的客户目标和玩家分层推断。"}
 
 二、核心策略大纲
 1. 项目背景与客户真实需求
@@ -4881,8 +5300,8 @@ function SchemeOutlineAssistant({
 - 执行页：排期、分工、资源需求。
 - 收束页：优势亮点、风险预案、效果预估。
 
-四、Brief 解析依据
-${briefOutput ? summarize(briefOutput, 1200) : "暂未生成 Brief 解析报告，建议先完成 Brief 解析后再生成大纲。"}
+四、QA 建议依据
+${briefOutput ? summarize(briefOutput, 1200) : "暂未生成 QA 建议，建议先完成 QA 生成后再生成大纲。"}
 
 五、补充要求吸收
 ${form.notes || "暂无额外补充。"}`;
@@ -4892,8 +5311,8 @@ ${form.notes || "暂无额外补充。"}`;
 
   return (
     <section className={embedded ? "assistant-subpage" : "page"}>
-      {!embedded && <PageTitle title="大纲生成" subtitle="基于 Brief 解析报告和用户输入的方向、主题，构思方案大纲。" />}
-      {embedded && <div className="subpage-heading"><strong>大纲生成</strong><span>基于 Brief 解析报告和用户输入的方向、主题，构思方案大纲。</span></div>}
+      {!embedded && <PageTitle title="大纲生成" subtitle="基于 QA 建议和用户输入的方向、主题，构思方案大纲。" />}
+      {embedded && <div className="subpage-heading"><strong>大纲生成</strong><span>基于 QA 建议和用户输入的方向、主题，构思方案大纲。</span></div>}
       <div className="split-panel">
         <Card title="大纲方向">
           <div className="form-grid">
@@ -4903,8 +5322,8 @@ ${form.notes || "暂无额外补充。"}`;
           </div>
           <textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="补充要求：客户希望突出什么、避免什么、偏好的表达方式、必须出现的章节等。" />
           <div className="note-box">
-            <strong>已读取 Brief 解析报告</strong>
-            <p>{briefOutput ? summarize(briefOutput) : "还没有 Brief 解析报告。可以先在 Brief 解析页上传文件并生成结构报告。"}</p>
+            <strong>已读取 QA 建议</strong>
+            <p>{briefOutput ? summarize(briefOutput) : "还没有 QA 建议。可以先在 QA 生成页上传文件并生成客户确认问题。"}</p>
           </div>
           <button className="primary-button wide" onClick={runOutline}>生成方案大纲</button>
         </Card>
@@ -4992,7 +5411,7 @@ function OutlineAssistant({
             </div>
             <div className="note-box">
               <strong>已载入需求解构</strong>
-              <p>{briefOutput ? summarize(briefOutput) : "还没有 Brief 解析结果，可以先去“方案助手 > Brief 解析”生成。"}</p>
+              <p>{briefOutput ? summarize(briefOutput) : "还没有 QA 建议，可以先去“方案助手 > QA 生成”生成。"}</p>
             </div>
             <div className="note-box">
               <strong>本次生成会包含</strong>
@@ -5388,8 +5807,8 @@ function MarketingResearchBoard({
         const result = await response.json();
         if (!response.ok) throw new Error(result.error?.message || result.error || "Brief 拆解 API 调用失败。");
         const output = extractAiText(result);
-        setBriefBreakdown(output || JSON.stringify(result, null, 2));
-        const outputText = output || JSON.stringify(result, null, 2);
+        setBriefBreakdown(output || cleanAiMarkdown(JSON.stringify(result, null, 2)));
+        const outputText = output || cleanAiMarkdown(JSON.stringify(result, null, 2));
         setBriefForm((current) => ({
           ...current,
           projectName: current.projectName || inferBriefFieldFromText(outputText, "projectName"),
@@ -5444,7 +5863,7 @@ ${linkedResourceContext}`;
         const result = await response.json();
         if (!response.ok) throw new Error(result.error?.message || result.error || `${selectedFixedModule.title}分析失败。`);
         const output = extractAiText(result);
-        setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: output || JSON.stringify(result, null, 2) }));
+        setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: output || cleanAiMarkdown(JSON.stringify(result, null, 2)) }));
       } else {
         const localAnalysis = `${buildLocalFixedModuleAnalysis(selectedFixedModule, briefBreakdown, briefForm)}
 
@@ -5498,7 +5917,7 @@ ${linkedResourceContext}`;
         setVariableModuleOutputs((current) => ({
           ...current,
           _message: "",
-          [selectedVariableModules.map((item) => item.scene).join(" + ")]: output || JSON.stringify(result, null, 2),
+          [selectedVariableModules.map((item) => item.scene).join(" + ")]: output || cleanAiMarkdown(JSON.stringify(result, null, 2)),
         }));
       } else {
         const localOutput = selectedVariableModules.map((scenario) => `【${scenario.scene}】
@@ -5550,7 +5969,7 @@ ${linkedResourceContext}`;
         const result = await response.json();
         if (!response.ok) throw new Error(result.error?.message || result.error || "完整调研报告生成失败。");
         const output = extractAiText(result);
-        setFinalReport(output || JSON.stringify(result, null, 2));
+        setFinalReport(output || cleanAiMarkdown(JSON.stringify(result, null, 2)));
       } else {
         setFinalReport(`一、项目需求总览
 ${briefBreakdown ? summarize(briefBreakdown) : "尚未生成 Brief 拆解，建议先完成第一步。"}
@@ -5583,9 +6002,7 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
     <section className="page">
       <PageTitle title="营销调研" subtitle="游戏营销前期调研标准化框架：固定模块统一基础认知，可变模块按 Brief 场景增补。" />
 
-      <WorkbenchAssistStrip status={generationStatus} missingItems={missingInputs} />
-
-      <ResearchFlowStatus steps={flowSteps} activeTab={tab} setTab={setTab} />
+      <ResearchStepTabs steps={flowSteps} activeTab={tab} setTab={setTab} />
 
       {tab === "brief" && (
         <div className="brief-workbench">
@@ -5631,48 +6048,36 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
               hint="可选择历史方案、竞品资料、复盘报告、QA 或已沉淀 Brief；AI 会自动带入后续拆解、固定模块、可变模块和最终报告。"
             />
             <RecommendedResources resources={recommendedResources} onAddAll={linkRecommendedResources} />
-            <textarea value={briefForm.forbidden} onChange={(event) => setBriefForm({ ...briefForm, forbidden: event.target.value })} placeholder="约束 / 禁忌：预算限制、时间限制、品牌红线、不可触碰话题、素材限制等。" />
-            <textarea value={briefForm.brief} onChange={(event) => setBriefForm({ ...briefForm, brief: event.target.value })} placeholder="粘贴 Brief 正文、客户沟通记录、会议纪要或补充说明。" />
             <GlobalAiConfigNotice apiConfig={apiConfig} />
             <button className="primary-button wide" onClick={runBriefBreakdown} disabled={isRunningBrief}>{isRunningBrief ? "拆解中..." : "AI 拆解 Brief"}</button>
           </Card>
           <Card title="Brief 拆解结果">
-            <div className="auto-brief-fields">
-              <Info label="项目名称" value={extractedBriefInfo.projectName || "待 AI 提取"} />
-              <Info label="游戏名称" value={extractedBriefInfo.gameName || "待 AI 提取"} />
-              <Info label="项目类型" value={extractedBriefInfo.projectType || "待 AI 提取"} />
-              <Info label="营销目标 / 场景" value={extractedBriefInfo.marketingGoal || "待 AI 提取"} />
+            <div className="auto-brief-fields editable-brief-fields">
+              <label>
+                <span>项目名称</span>
+                <input value={briefForm.projectName} onChange={(event) => setBriefForm({ ...briefForm, projectName: event.target.value })} placeholder={extractedBriefInfo.projectName || "待 AI 提取"} />
+              </label>
+              <label>
+                <span>游戏名称</span>
+                <input value={briefForm.gameName} onChange={(event) => setBriefForm({ ...briefForm, gameName: event.target.value })} placeholder={extractedBriefInfo.gameName || "待 AI 提取"} />
+              </label>
+              <label>
+                <span>项目类型</span>
+                <input value={briefForm.projectType} onChange={(event) => setBriefForm({ ...briefForm, projectType: event.target.value })} placeholder="待 AI 提取" />
+              </label>
+              <label>
+                <span>营销目标 / 场景</span>
+                <textarea value={briefForm.marketingGoal} onChange={(event) => setBriefForm({ ...briefForm, marketingGoal: event.target.value })} placeholder={extractedBriefInfo.marketingGoal || "待 AI 提取"} />
+              </label>
             </div>
-            <div className="brief-output-guide">
-              <span>核心需求</span>
-              <span>次要需求</span>
-              <span>隐性需求</span>
-              <span>优先级</span>
-              <span>约束条件</span>
-            </div>
-            <pre className="ai-output">{briefBreakdown || "上传或粘贴 Brief 后，点击“AI 拆解 Brief”。这里会输出核心需求、次要需求、隐性需求、需求优先级、预算/时间/资源/合规约束，以及下一步调研执行清单。"}</pre>
+            <EditableBriefBreakdown value={briefBreakdown} onChange={setBriefBreakdown} />
           </Card>
         </div>
       )}
 
       {tab === "fixed" && (
         <div className="fixed-module-workbench">
-          <Card title="Brief 提取上下文">
-            <FlowTransferNotice
-              status={hasBriefBreakdown ? "已完成" : "缺资料"}
-              title={hasBriefBreakdown ? "已自动接收拆 Brief 结果" : "还没有可接收的 Brief 拆解"}
-              detail={hasBriefBreakdown ? "本页生成固定模块时，会直接使用第一步输出的核心需求、隐性需求、优先级、约束条件和项目基础信息。" : "先回到“拆 Brief”上传或粘贴客户材料，并生成需求拆解。"}
-            />
-            <div className="brief-context-box">
-              <strong>{briefForm.projectName || "未命名项目"} / {briefForm.gameName || "未填写游戏"}</strong>
-              <span>{briefForm.projectType}</span>
-              <p>{briefForm.marketingGoal || "尚未填写营销目标/场景。"}</p>
-            </div>
-            <div className="note-box">
-              <strong>上一步拆解结果</strong>
-              <p>{briefBreakdown ? summarize(briefBreakdown) : "还没有 Brief 拆解结果。建议先在“拆 Brief”页生成，再进入固定模块深度分析。"}</p>
-            </div>
-            <LinkedResourceSummary resources={linkedResources} />
+          <Card title="固定分析模块">
             <div className="research-list">
               {fixedResearchModules.map((module, index) => (
                 <button
@@ -5681,7 +6086,6 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
                   onClick={() => setActiveFixedModule(module.title)}
                 >
                   <strong>{index + 1}. {module.title}</strong>
-                  <span>{module.output}</span>
                 </button>
               ))}
             </div>
@@ -5690,20 +6094,12 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
             title={`${selectedFixedModule.title}深度分析`}
             action={<button className="primary-button" onClick={runFixedModuleAnalysis} disabled={isRunningFixedModule}>{isRunningFixedModule ? "分析中..." : "AI 深度分析"}</button>}
           >
-            <p className="muted">{selectedFixedModule.goal}</p>
-            <div className="research-grid practical-grid">
-              {selectedFixedModule.checklist.map((item) => (
-                <div className="research-block practical-block" key={item}>
-                  <h3>{item.split("（")[0]}</h3>
-                  <p>{item}</p>
-                </div>
-              ))}
-            </div>
-            <div className="note-box">
-              <strong>本模块会自动使用</strong>
-              <p>第一步拆 Brief 的核心需求、次要需求、隐性需求、优先级、预算/时间/资源/合规约束，并结合当前项目基础信息生成分析。</p>
-            </div>
-            <pre className="ai-output compact">{selectedFixedOutput || `点击“AI 深度分析”后，这里会生成${selectedFixedModule.title}的本次项目分析结论、逐项判断、方案可用内容和补数清单。`}</pre>
+            <EditableModuleOutput
+              titles={selectedFixedModule.checklist.map(cleanModuleHeading)}
+              value={selectedFixedOutput}
+              onChange={(next) => setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: next }))}
+              placeholderPrefix="AI 会在这里输出："
+            />
           </Card>
         </div>
       )}
@@ -5711,16 +6107,6 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
       {tab === "variable" && (
         <div className="variable-layout">
           <Card title="客户选择额外模块">
-            <FlowTransferNotice
-              status={hasBriefBreakdown ? (hasVariableSelection ? "可继续生成" : "缺资料") : "缺资料"}
-              title={hasBriefBreakdown ? "Brief 拆解已带入本页" : "等待 Brief 拆解"}
-              detail={hasBriefBreakdown ? "客户在这里选择需要额外深挖的场景，AI 会结合 Brief 与固定模块结论生成可变模块分析。" : "先完成拆 Brief，本页才有明确的选择依据。"}
-            />
-            <div className="note-box">
-              <strong>系统会参考 Brief 拆解</strong>
-              <p>{briefBreakdown ? summarize(briefBreakdown) : "请先完成拆 Brief。下方可由客户选择本次需要额外深挖的营销场景。"}</p>
-            </div>
-            <LinkedResourceSummary resources={linkedResources} />
             <div className="research-list">
               {variableResearchScenarios.map((scenario) => (
                 <button
@@ -5752,9 +6138,12 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
                 </div>
               ))}
             </div>
-            <pre className="ai-output compact">
-              {variableModuleOutputs._message || Object.entries(variableModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${output}`).join("\n\n") || "选择客户需要的额外模块后，点击“AI 分析所选模块”。这里会基于 Brief 拆解和固定模块结果生成场景增补分析。"}
-            </pre>
+            <textarea
+              className="editable-output-area compact"
+              value={variableModuleOutputs._message || Object.entries(variableModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${output}`).join("\n\n")}
+              onChange={(event) => setVariableModuleOutputs({ _message: "", 手动修改: event.target.value })}
+              placeholder="选择客户需要的额外模块后，点击“AI 分析所选模块”。这里会基于 Brief 拆解和固定模块结果生成场景增补分析。"
+            />
           </Card>
         </div>
       )}
@@ -5781,10 +6170,28 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
             <Info label="可变模块" value={`${variableDoneCount} 组`} />
             <Info label="资料库引用" value={`${linkedResources.length} 份`} />
           </div>
-          <pre className="ai-output">{finalReport || "点击“生成完整报告”后，系统会把 Brief 拆解、固定模块分析、客户选择的可变模块分析统一整理成一份完整的营销调研报告。"}</pre>
+          <textarea
+            className="editable-output-area"
+            value={finalReport}
+            onChange={(event) => setFinalReport(event.target.value)}
+            placeholder="点击“生成完整报告”后，系统会把 Brief 拆解、固定模块分析、客户选择的可变模块分析统一整理成一份完整的营销调研报告。"
+          />
         </Card>
       )}
     </section>
+  );
+}
+
+function ResearchStepTabs({ steps, activeTab, setTab }: { steps: FlowStep[]; activeTab: ResearchTab; setTab: (tab: ResearchTab) => void }) {
+  return (
+    <div className="research-step-tabs" aria-label="营销调研步骤">
+      {steps.map((step, index) => (
+        <button key={step.key} className={activeTab === step.key ? "active" : ""} onClick={() => setTab(step.key)}>
+          <span>{index + 1}</span>
+          <strong>{step.title}</strong>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -6450,7 +6857,7 @@ function PeopleTaskDetailTable({
 function AiJobs({ jobs, embedded = false }: { jobs: AiJob[]; embedded?: boolean }) {
   return (
     <section className={embedded ? "" : "page"}>
-      {!embedded && <PageTitle title="AI 任务记录" subtitle="追踪文档解析、Brief 解析、PPT 模板、内容检查和排期生成任务。" />}
+      {!embedded && <PageTitle title="AI 任务记录" subtitle="追踪文档解析、QA 生成、PPT 模板、内容检查和排期生成任务。" />}
       <Card title={embedded ? "" : "任务列表"}>
         <table>
           <thead>
@@ -6514,6 +6921,7 @@ ${form.speakerStyle || "未填写"}
 请从上传文件中自动识别必讲模块、客户关注重点、禁忌内容和互动环节机会；识别不到请标注“需补充确认”。
 
 请输出：
+${pureMarkdownOutputRule}
 一、多场景讲稿定位
 - 判断该讲稿属于客户提案、内部汇报、投标答辩、项目复盘、发布会或内部培训中的哪类。
 - 给出适配的开场策略、内容重点和收尾策略。
@@ -6812,6 +7220,7 @@ function buildTargetUserInsightPrompt(form: { projectName: string; gameName: str
   return `你是游戏营销调研专家，请基于用户投喂的信息生成“目标用户洞察”。
 
 输出要求：
+${pureMarkdownOutputRule}
 1. 必须用中文输出，结构清晰，可直接放入营销策略方案。
 2. 不要编造精确数据；没有被投喂的数据请标注“需补充数据”或“基于输入推断”。
 3. 需要区分核心用户与潜在用户，输出画像、需求、痛点、偏好趋势、营销适配建议和总结。
@@ -6941,6 +7350,7 @@ ${variableScenario.questions.map((item) => `- ${item}`).join("\n")}
   return `你是资深游戏营销前期调研专家，请基于用户投喂的信息生成“${moduleName}”。
 
 输出要求：
+${pureMarkdownOutputRule}
 1. 必须用中文输出，结构清晰，可直接放入营销策略方案。
 2. 不要编造精确数据；未提供的数据请标注“需补充数据”或“基于输入推断”。
 3. 明确区分事实、推断、风险和行动建议。
@@ -6979,7 +7389,7 @@ ${formLines}`;
 }
 
 function extractAiText(result: any) {
-  return (
+  const text = (
     result.output_text ||
     result.output ||
     result.report ||
@@ -6991,6 +7401,7 @@ function extractAiText(result: any) {
       ? result.output.map((item: any) => item.content?.map?.((content: any) => content.text).filter(Boolean).join("\n") || item.text || "").filter(Boolean).join("\n")
       : "")
   );
+  return cleanAiMarkdown(text);
 }
 
 function MarketingResearchGenerator({ addJob }: { addJob: (type: string, name: string, source: string) => void }) {
@@ -7291,7 +7702,7 @@ function Settings() {
           {aiSettingsMessage && <span>{aiSettingsMessage}</span>}
         </div>
         <div className="note-box">
-          <p>配置后，方案 Brief 解析、营销调研、讲稿输出都会直接使用这里的接口。未配置接口时，各页面会自动使用本地规则兜底生成。</p>
+          <p>配置后，方案 QA 生成、营销调研、讲稿输出都会直接使用这里的接口。未配置接口时，各页面会自动使用本地规则兜底生成。</p>
         </div>
       </Card>
       <Card title="知识库检索方式">

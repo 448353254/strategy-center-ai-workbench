@@ -2911,6 +2911,32 @@ textarea {
   font-weight: 800;
 }
 
+.brief-section-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.brief-section-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(23, 33, 43, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.brief-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brief-section-head strong {
+  font-size: 16px;
+}
+
+
 .auto-brief-fields,
 .report-source-grid {
   display: grid;
@@ -3677,4 +3703,273 @@ hr {
     width: 150px;
     height: 150px;
   }
+}
+
+.editable-brief-fields label {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.editable-brief-fields label > span {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.editable-brief-fields input,
+.editable-brief-fields textarea {
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 800;
+  line-height: 1.7;
+  outline: 0;
+  resize: vertical;
+}
+
+.editable-brief-fields textarea {
+  min-height: 76px;
+  font-weight: 700;
+}
+
+.editable-brief-fields input:focus,
+.editable-brief-fields textarea:focus {
+  background: rgba(49, 95, 143, 0.06);
+  box-shadow: 0 0 0 6px rgba(49, 95, 143, 0.06);
+}
+
+.brief-section-card .brief-section-editor {
+  min-height: 180px;
+  margin: 0;
+  padding: 14px;
+  border: 0;
+  border-radius: 14px;
+  color: #31404e;
+  background: rgba(246, 248, 247, 0.82);
+  line-height: 1.75;
+  resize: vertical;
+}
+
+.brief-section-card .brief-section-editor:focus {
+  outline: 2px solid rgba(49, 95, 143, 0.22);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.research-step-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.research-step-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 12px 14px;
+  border: 1px solid rgba(23, 33, 43, 0.08);
+  border-radius: 14px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.72);
+  text-align: left;
+}
+
+.research-step-tabs button.active {
+  border-color: rgba(49, 95, 143, 0.3);
+  background: rgba(236, 244, 251, 0.94);
+  box-shadow: 0 12px 28px rgba(49, 95, 143, 0.12);
+}
+
+.research-step-tabs span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  color: white;
+  background: var(--ink);
+  font-weight: 900;
+}
+
+.research-step-tabs strong {
+  min-width: 0;
+  font-size: 14px;
+}
+
+.editable-output-area {
+  width: 100%;
+  min-height: 430px;
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid rgba(23, 33, 43, 0.08);
+  border-radius: 20px;
+  color: #26323d;
+  background: #fffdf7;
+  line-height: 1.8;
+  resize: vertical;
+}
+
+.editable-output-area.compact {
+  min-height: 300px;
+}
+
+.editable-output-area:focus {
+  outline: 2px solid rgba(49, 95, 143, 0.22);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+
+.erp-auth-fields {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1.2fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.erp-auth-fields input {
+  width: 100%;
+  min-width: 0;
+}
+
+.erp-login-panel {
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .erp-auth-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.erp-file-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.erp-file-list strong {
+  color: var(--ink);
+}
+
+.erp-file-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.erp-file-item:first-of-type {
+  border-top: 0;
+}
+
+.erp-file-item a {
+  color: var(--blue);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.attachment-readable-preview {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  margin-top: 4px;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: #26323d;
+  background: #fffdf7;
+  line-height: 1.75;
+}
+
+.attachment-readable-preview strong {
+  display: block;
+  margin-top: 8px;
+  color: #24453a;
+  font-size: 14px;
+}
+
+.attachment-readable-preview p {
+  margin: 0;
+  color: #354350;
+  font-size: 13px;
+}
+
+.plan-analysis-editor {
+  min-height: 430px;
+  border-radius: 14px;
+}
+
+.card .module-output-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.card .brief-section-card {
+  border-radius: 14px;
+}
+
+.card .brief-section-card .brief-section-editor {
+  min-height: 130px;
+  margin-top: 8px;
+  border-radius: 12px;
+  line-height: 1.75;
+}
+
+.attachment-summary-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fffdf7;
+  color: #26323d;
+}
+
+.attachment-summary-card strong {
+  color: #24453a;
+  font-size: 14px;
+}
+
+.attachment-summary-card p {
+  margin: 0;
+  padding-left: 12px;
+  position: relative;
+  color: #354350;
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.attachment-summary-card p::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.75em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.erp-file-name {
+  color: var(--blue);
+  font-weight: 700;
+  line-height: 1.5;
 }
