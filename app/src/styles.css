@@ -2067,6 +2067,65 @@ textarea {
   font-weight: 800;
 }
 
+.ai-module-config-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-module-config-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(180px, 1fr) minmax(160px, 0.85fr) minmax(160px, 0.85fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(23, 33, 43, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.ai-module-config-meta {
+  display: grid;
+  align-self: stretch;
+  align-content: center;
+  gap: 5px;
+}
+
+.ai-module-config-meta strong {
+  font-size: 14px;
+}
+
+.ai-module-config-meta span,
+.ai-module-config-meta em,
+.ai-module-config-meta small {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.ai-module-config-row label {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-module-config-row label > span,
+.ai-module-config-row .field-block span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-module-config-row input,
+.ai-module-config-row select {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
 .stack-panel {
   display: grid;
   gap: 22px;

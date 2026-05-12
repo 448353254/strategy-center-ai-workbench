@@ -21,7 +21,6 @@ type Page =
   | "brief"
   | "outline"
   | "script"
-  | "aiJobs"
   | "settings";
 
 type OutlineTab = "template" | "audit";
@@ -156,12 +155,38 @@ interface BriefApiConfig {
   model: string;
 }
 
+type AiModuleKey = "default" | "qa" | "marketingBrief" | "fixedResearch" | "variableResearch" | "finalReport" | "planAnalysis" | "script" | "researchGenerator";
+
+interface AiModuleOption {
+  key: AiModuleKey;
+  title: string;
+  description: string;
+  recommendedModel: string;
+}
+
+type AiModuleConfig = Record<AiModuleKey, BriefApiConfig>;
+
 const globalAiConfigKey = "strategy-center-global-ai-config";
 const defaultAiConfig: BriefApiConfig = {
   endpoint: "",
   apiKey: "",
   model: "",
 };
+const aiModuleOptions: AiModuleOption[] = [
+  { key: "default", title: "默认 AI", description: "其他模块未单独配置时使用。建议填接口地址和 API Key。", recommendedModel: "deepseek-chat / gpt-5.4-mini" },
+  { key: "qa", title: "QA 生成", description: "方案助手里的历史 QA 检索和本次 QA 建议。", recommendedModel: "deepseek-chat / gpt-5.4-mini" },
+  { key: "marketingBrief", title: "Brief 拆解", description: "营销调研第一步，拆显性需求、隐性需求和调研路径。", recommendedModel: "deepseek-chat / gpt-5.4-mini" },
+  { key: "fixedResearch", title: "固定模块分析", description: "用户深度调查、竞品、平台、内容方向等固定模块。", recommendedModel: "deepseek-reasoner / gpt-5.4" },
+  { key: "variableResearch", title: "可变模块分析", description: "根据 Brief 场景选择的增补模块。", recommendedModel: "deepseek-reasoner / gpt-5.4" },
+  { key: "finalReport", title: "完整调研报告", description: "最终完整营销调研报告，必须用 AI 分析生成。", recommendedModel: "deepseek-reasoner / gpt-5.4" },
+  { key: "planAnalysis", title: "方案详情分析", description: "资料库方案亮点、缺点、中标/未中标复盘。", recommendedModel: "deepseek-reasoner / gpt-5.4" },
+  { key: "script", title: "讲稿输出", description: "把方案/PPT 转成宣讲稿和答辩辅助。", recommendedModel: "deepseek-chat / gpt-5.4-mini" },
+  { key: "researchGenerator", title: "旧版调研生成器", description: "目标用户洞察和旧版营销调研模块。", recommendedModel: "deepseek-chat / gpt-5.4" },
+];
+const defaultAiModuleConfig: AiModuleConfig = aiModuleOptions.reduce((config, option) => {
+  config[option.key] = { ...defaultAiConfig };
+  return config;
+}, {} as AiModuleConfig);
 
 interface BriefInputFile {
   id: number;
@@ -539,31 +564,60 @@ function usePersistentState<T>(key: string, initialValue: T) {
   return [value, setValue] as const;
 }
 
+function normalizeAiConfig(config?: Partial<BriefApiConfig> | null): BriefApiConfig {
+  return {
+    endpoint: config?.endpoint ?? "",
+    apiKey: config?.apiKey ?? "",
+    model: config?.model ?? "",
+  };
+}
+
+function mergeAiConfig(base: BriefApiConfig, override?: Partial<BriefApiConfig> | null): BriefApiConfig {
+  return {
+    endpoint: override?.endpoint?.trim() ? override.endpoint : base.endpoint,
+    apiKey: override?.apiKey?.trim() ? override.apiKey : base.apiKey,
+    model: override?.model?.trim() ? override.model : base.model,
+  };
+}
+
+function normalizeAiModuleConfig(value?: Partial<AiModuleConfig> | null): AiModuleConfig {
+  return aiModuleOptions.reduce((config, option) => {
+    config[option.key] = normalizeAiConfig(value?.[option.key]);
+    return config;
+  }, {} as AiModuleConfig);
+}
+
+function resolveModuleAiConfig(config: AiModuleConfig, module: AiModuleKey) {
+  return module === "default" ? config.default : mergeAiConfig(config.default, config[module]);
+}
+
 function readStoredAiConfig(key: string): BriefApiConfig | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<BriefApiConfig>;
     if (!parsed.endpoint && !parsed.apiKey && !parsed.model) return null;
-    return {
-      endpoint: parsed.endpoint ?? "",
-      apiKey: parsed.apiKey ?? "",
-      model: parsed.model ?? "",
-    };
+    return normalizeAiConfig(parsed);
   } catch {
     return null;
   }
 }
 
 function useGlobalAiConfig() {
-  return usePersistentState<BriefApiConfig>(globalAiConfigKey, defaultAiConfig);
+  const [moduleConfig, setModuleConfig] = usePersistentState<AiModuleConfig>(globalAiConfigKey, defaultAiModuleConfig);
+  return [normalizeAiModuleConfig(moduleConfig), setModuleConfig] as const;
 }
 
 function useMigratedGlobalAiConfig() {
-  const [apiConfig, setApiConfig] = useGlobalAiConfig();
+  const [aiConfig, setAiConfig] = useGlobalAiConfig();
 
   useEffect(() => {
-    if (apiConfig.endpoint || apiConfig.apiKey || apiConfig.model) return;
+    if (aiConfig.default.endpoint || aiConfig.default.apiKey || aiConfig.default.model) return;
+    const storedDefault = readStoredAiConfig(globalAiConfigKey);
+    if (storedDefault) {
+      setAiConfig((current) => ({ ...normalizeAiModuleConfig(current), default: storedDefault }));
+      return;
+    }
     const legacyKeys = [
       "strategy-center-brief-api-config",
       "strategy-center-marketing-brief-api-config",
@@ -571,10 +625,10 @@ function useMigratedGlobalAiConfig() {
       "strategy-center-marketing-research-api-config",
     ];
     const legacyConfig = legacyKeys.map(readStoredAiConfig).find((config): config is BriefApiConfig => Boolean(config));
-    if (legacyConfig) setApiConfig(legacyConfig);
-  }, [apiConfig.apiKey, apiConfig.endpoint, apiConfig.model, setApiConfig]);
+    if (legacyConfig) setAiConfig((current) => ({ ...normalizeAiModuleConfig(current), default: legacyConfig }));
+  }, [aiConfig.default.apiKey, aiConfig.default.endpoint, aiConfig.default.model, setAiConfig]);
 
-  return [apiConfig, setApiConfig] as const;
+  return [aiConfig, setAiConfig] as const;
 }
 
 function today() {
@@ -3049,7 +3103,6 @@ function App() {
             addJob={addJob}
           />
         )}
-        {page === "aiJobs" && <AiJobs jobs={jobs} />}
         {page === "settings" && (isAdmin ? <Settings /> : <AccessDenied setPage={setPage} />)}
       </main>
     </div>
@@ -3124,7 +3177,6 @@ function Sidebar({ page, setPage, user }: { page: Page; setPage: (page: Page) =>
     { key: "brief", label: "方案助手", icon: "✦" },
     { key: "script", label: "讲稿输出", icon: "◐" },
     { key: "resources", label: "资料库", icon: "◫" },
-    { key: "aiJobs", label: "AI 任务记录", icon: "◎" },
     { key: "settings", label: "系统设置", icon: "⚙", adminOnly: true },
   ];
   const items = allItems.filter((item) => !item.adminOnly || user.role === "admin");
@@ -3202,7 +3254,6 @@ function Topbar({
       { id: "page-brief", kind: "页面", title: "方案助手", meta: "QA 生成 / PPT 模板", detail: "进入方案助手，生成客户 QA 建议、方案大纲和内容检查。", action: () => setPage("brief") },
       { id: "page-script", kind: "页面", title: "讲稿输出", meta: "逐字稿 / 答辩物料", detail: "根据方案 PPT 和资料库生成宣讲稿。", action: () => setPage("script") },
       { id: "page-resources", kind: "页面", title: "资料库", meta: "历史方案 / 竞品资料 / 复盘", detail: "检索、上传和复用策略资产。", action: () => setPage("resources") },
-      { id: "page-ai", kind: "页面", title: "AI 任务记录", meta: "生成记录", detail: "查看 AI 解析、生成、排期任务。", action: () => setPage("aiJobs") },
       { id: "page-settings", kind: "页面", title: "系统设置", meta: "全局 AI / 检索方式", detail: "配置全局 AI 接口、模型和知识库检索方式。", action: () => setPage("settings") },
     ];
     const pageSearchItems = allPageSearchItems.filter((item) => user.role === "admin" || !["page-settings", "page-people"].includes(item.id));
@@ -3263,18 +3314,8 @@ function Topbar({
         detail: resource.summary,
         action: () => openResource(resource.id),
       }));
-    const jobResults: SearchResult[] = jobs
-      .filter((job) => includesQuery([job.type, job.name, job.owner, job.createdAt, job.status, job.source]))
-      .map((job) => ({
-        id: `job-${job.id}`,
-        kind: "AI",
-        title: job.name,
-        meta: `${job.type} · ${job.status}`,
-        detail: `${job.source} / ${job.createdAt}`,
-        action: () => setPage("aiJobs"),
-      }));
-    return [...pageResults, ...projectResults, ...taskResults, ...resourceResults, ...jobResults].slice(0, 8);
-  }, [jobs, normalizedQuery, openProject, openResource, projects, resources, setPage]);
+    return [...pageResults, ...projectResults, ...taskResults, ...resourceResults].slice(0, 8);
+  }, [normalizedQuery, openProject, openResource, projects, resources, setPage, user.role]);
 
   const openResult = (result: SearchResult) => {
     result.action();
@@ -3460,9 +3501,6 @@ function Home({
         <button className="quick-panel-audit" onClick={() => openOutline("audit")}>内容检查报告</button>
         <button onClick={() => setPage("projects")}>新建项目</button>
       </div>
-      <Card title="最近 AI 任务">
-        <AiJobs jobs={jobs.slice(0, 3)} embedded />
-      </Card>
     </section>
   );
 }
@@ -4698,7 +4736,8 @@ function ResourceDetail({ resource, deleteResource, setPage, addJob, isAdmin }: 
   const [attachmentContents, setAttachmentContents] = useState<Record<string, string>>({});
   const [attachmentSummaries, setAttachmentSummaries] = useState<Record<string, string>>({});
   const [readingFileId, setReadingFileId] = useState<string | number | null>(null);
-  const [apiConfig] = useGlobalAiConfig();
+  const [aiConfig] = useGlobalAiConfig();
+  const apiConfig = resolveModuleAiConfig(aiConfig, "planAnalysis");
   const spreadsheet = spreadsheetFromResource(resource);
   const raw = (resource.erpSource?.raw || {}) as Record<string, unknown>;
   const attachmentText = Object.entries(attachmentContents).map(([fileId, content]) => `附件 ${fileId}\n${content}`).join("\n\n");
@@ -4995,7 +5034,8 @@ function BriefAssistant({
   addJob: (type: string, name: string, source: string) => void;
   embedded?: boolean;
 }) {
-  const [apiConfig] = useGlobalAiConfig();
+  const [aiConfig] = useGlobalAiConfig();
+  const apiConfig = resolveModuleAiConfig(aiConfig, "qa");
   const [isRunning, setIsRunning] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [parsedFiles, setParsedFiles] = useState<BriefInputFile[]>([]);
@@ -5612,7 +5652,11 @@ function MarketingResearchBoard({
   addJob: (type: string, name: string, source: string) => void;
 }) {
   const [tab, setTab] = useState<ResearchTab>("brief");
-  const [apiConfig] = useGlobalAiConfig();
+  const [aiConfig] = useGlobalAiConfig();
+  const marketingBriefAiConfig = resolveModuleAiConfig(aiConfig, "marketingBrief");
+  const fixedResearchAiConfig = resolveModuleAiConfig(aiConfig, "fixedResearch");
+  const variableResearchAiConfig = resolveModuleAiConfig(aiConfig, "variableResearch");
+  const finalReportAiConfig = resolveModuleAiConfig(aiConfig, "finalReport");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [parsedFiles, setParsedFiles] = useState<BriefInputFile[]>([]);
   const [linkedResourceIds, setLinkedResourceIds] = usePersistentState<number[]>("strategy-center-marketing-linked-resources", []);
@@ -5787,15 +5831,15 @@ function MarketingResearchBoard({
       const combinedFiles = [...inputFiles, ...linkedResourceFiles];
       const inputPackage = buildMarketingBriefInputPackage(briefForm, combinedFiles);
       const prompt = buildMarketingBriefPrompt(inputPackage);
-      if (apiConfig.endpoint.trim()) {
+      if (marketingBriefAiConfig.endpoint.trim()) {
         setBriefBreakdown("正在调用 AI 拆解 Brief...");
         const response = await fetch("/api/brief-run", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            endpoint: apiConfig.endpoint.trim(),
-            apiKey: apiConfig.apiKey.trim(),
-            model: apiConfig.model.trim() || undefined,
+            endpoint: marketingBriefAiConfig.endpoint.trim(),
+            apiKey: marketingBriefAiConfig.apiKey.trim(),
+            model: marketingBriefAiConfig.model.trim() || undefined,
             input: { ...briefForm, files: combinedFiles.map((file) => ({ name: file.name, summary: file.summary, content: file.content })), linkedResources },
             prompt,
             messages: [
@@ -5843,15 +5887,15 @@ function MarketingResearchBoard({
 
 资料库引用：
 ${linkedResourceContext}`;
-      if (apiConfig.endpoint.trim()) {
+      if (fixedResearchAiConfig.endpoint.trim()) {
         setFixedModuleOutputs((current) => ({ ...current, [selectedFixedModule.title]: `正在生成${selectedFixedModule.title}分析...` }));
         const response = await fetch("/api/marketing-research-run", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            endpoint: apiConfig.endpoint.trim(),
-            apiKey: apiConfig.apiKey.trim(),
-            model: apiConfig.model.trim() || undefined,
+            endpoint: fixedResearchAiConfig.endpoint.trim(),
+            apiKey: fixedResearchAiConfig.apiKey.trim(),
+            model: fixedResearchAiConfig.model.trim() || undefined,
             input: { module: selectedFixedModule.title, briefBreakdown, briefForm, linkedResources },
             prompt,
             messages: [
@@ -5894,15 +5938,15 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
 
 资料库引用：
 ${linkedResourceContext}`;
-      if (apiConfig.endpoint.trim()) {
+      if (variableResearchAiConfig.endpoint.trim()) {
         setVariableModuleOutputs((current) => ({ ...current, _message: "正在生成可变模块分析..." }));
         const response = await fetch("/api/marketing-research-run", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            endpoint: apiConfig.endpoint.trim(),
-            apiKey: apiConfig.apiKey.trim(),
-            model: apiConfig.model.trim() || undefined,
+            endpoint: variableResearchAiConfig.endpoint.trim(),
+            apiKey: variableResearchAiConfig.apiKey.trim(),
+            model: variableResearchAiConfig.model.trim() || undefined,
             input: { modules: selectedVariableModules, briefBreakdown, fixedModuleOutputs, briefForm, linkedResources },
             prompt,
             messages: [
@@ -5945,8 +5989,8 @@ ${scenario.questions.map((item) => `- ${item}`).join("\n")}
   const runFinalReport = async () => {
     setIsRunningFinalReport(true);
     try {
-      if (!apiConfig.endpoint.trim()) {
-        setFinalReport("请先到系统设置填写全局 AI 配置。完整营销调研报告必须由 AI 基于 Brief 拆解、固定模块、可变模块和资料库引用进行分析生成，不再使用本地规则拼接。");
+      if (!finalReportAiConfig.endpoint.trim()) {
+        setFinalReport("请先到系统设置填写完整调研报告对应的 AI 配置，或填写默认 AI 配置。完整营销调研报告必须由 AI 基于 Brief 拆解、固定模块、可变模块和资料库引用进行分析生成，不再使用本地规则拼接。");
         return;
       }
       const prompt = `${buildFinalMarketingResearchReportPrompt({ briefContext: briefBreakdown, fixedOutputs: fixedModuleOutputs, variableOutputs: variableModuleOutputs, form: briefForm })}
@@ -5958,9 +6002,9 @@ ${linkedResourceContext}`;
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          endpoint: apiConfig.endpoint.trim(),
-          apiKey: apiConfig.apiKey.trim(),
-          model: apiConfig.model.trim() || undefined,
+          endpoint: finalReportAiConfig.endpoint.trim(),
+          apiKey: finalReportAiConfig.apiKey.trim(),
+          model: finalReportAiConfig.model.trim() || undefined,
           input: { briefBreakdown, fixedModuleOutputs, variableModuleOutputs, briefForm, linkedResources },
           prompt,
           messages: [
@@ -6031,7 +6075,7 @@ ${linkedResourceContext}`;
               hint="可选择历史方案、竞品资料、复盘报告、QA 或已沉淀 Brief；AI 会自动带入后续拆解、固定模块、可变模块和最终报告。"
             />
             <RecommendedResources resources={recommendedResources} onAddAll={linkRecommendedResources} />
-            <GlobalAiConfigNotice apiConfig={apiConfig} />
+            <GlobalAiConfigNotice apiConfig={marketingBriefAiConfig} />
             <button className="primary-button wide" onClick={runBriefBreakdown} disabled={isRunningBrief}>{isRunningBrief ? "拆解中..." : "AI 拆解 Brief"}</button>
           </Card>
           <Card title="Brief 拆解结果">
@@ -6232,7 +6276,7 @@ function GlobalAiConfigNotice({ apiConfig }: { apiConfig: BriefApiConfig }) {
   const isConfigured = Boolean(apiConfig.endpoint.trim());
   return (
     <div className={`global-ai-config-notice ${isConfigured ? "configured" : "fallback"}`}>
-      <span>{isConfigured ? "已使用全局 AI" : "未配置 AI"}</span>
+      <span>{isConfigured ? "已配置 AI" : "未配置 AI"}</span>
       <div>
         <strong>{isConfigured ? "接口配置来自系统设置" : "系统设置未配置 AI 接口"}</strong>
         <p>{isConfigured ? `当前模型：${apiConfig.model || "未指定，由接口默认处理"}。如需修改接口、Key 或模型，请到系统设置统一调整。` : "需要 AI 生成的模块会提示先到系统设置填写全局 AI 配置，不再用本地规则伪装成 AI 结果。"}</p>
@@ -6859,40 +6903,6 @@ function PeopleTaskDetailTable({
   );
 }
 
-function AiJobs({ jobs, embedded = false }: { jobs: AiJob[]; embedded?: boolean }) {
-  return (
-    <section className={embedded ? "" : "page"}>
-      {!embedded && <PageTitle title="AI 任务记录" subtitle="追踪文档解析、QA 生成、PPT 模板、内容检查和排期生成任务。" />}
-      <Card title={embedded ? "" : "任务列表"}>
-        <table>
-          <thead>
-            <tr>
-              <th>任务类型</th>
-              <th>任务名称</th>
-              <th>发起人</th>
-              <th>时间</th>
-              <th>状态</th>
-              <th>输入来源</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((job) => (
-              <tr key={job.id}>
-                <td>{job.type}</td>
-                <td>{job.name}</td>
-                <td>{job.owner}</td>
-                <td>{job.createdAt}</td>
-                <td><span className="status success">{job.status}</span></td>
-                <td>{job.source}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </section>
-  );
-}
-
 type ScriptForm = {
   usage: string;
   duration: string;
@@ -6996,7 +7006,8 @@ ${moduleList.map((module, index) => `【${index + 1}. ${module}】
 }
 
 function ScriptAssistant({ resources, addJob }: { resources: Resource[]; addJob: (type: string, name: string, source: string) => void }) {
-  const [apiConfig] = useGlobalAiConfig();
+  const [aiConfig] = useGlobalAiConfig();
+  const apiConfig = resolveModuleAiConfig(aiConfig, "script");
   const [form, setForm] = usePersistentState<ScriptForm>("strategy-center-script-form", {
     usage: "客户提案",
     duration: "20分钟",
@@ -7411,7 +7422,8 @@ function extractAiText(result: any) {
 
 function MarketingResearchGenerator({ addJob }: { addJob: (type: string, name: string, source: string) => void }) {
   const [activeModule, setActiveModule] = useState(marketingResearchModules[0].name);
-  const [apiConfig] = useGlobalAiConfig();
+  const [aiConfig] = useGlobalAiConfig();
+  const apiConfig = resolveModuleAiConfig(aiConfig, "researchGenerator");
   const [isRunning, setIsRunning] = useState(false);
   const [insightOutput, setInsightOutput] = usePersistentState("strategy-center-target-user-insight-output", "");
   const [researchOutputs, setResearchOutputs] = usePersistentState<Record<string, string>>("strategy-center-marketing-research-outputs", {});
@@ -7604,8 +7616,8 @@ function Settings() {
   });
   const [settingsMessage, setSettingsMessage] = useState("");
   const [aiSettingsMessage, setAiSettingsMessage] = useState("");
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelOptions, setModelOptions] = useState<Record<AiModuleKey, string[]>>({} as Record<AiModuleKey, string[]>);
+  const [loadingModelKey, setLoadingModelKey] = useState<AiModuleKey | null>(null);
   const capabilities = [
     { name: "后端语言", status: "目标栈", detail: "正式交付按 PHP 7 规划后端服务与接口实现。" },
     { name: "服务器环境", status: "目标栈", detail: "部署环境按 Linux CentOS + Nginx 规划，数据库使用 MySQL 5.7，缓存、会话和队列使用 Redis。" },
@@ -7614,7 +7626,7 @@ function Settings() {
     { name: "权限体系", status: "待接入", detail: "用户管理和角色权限仍为占位，试点阶段暂不做登录鉴权。" },
     { name: "文件解析", status: "待接入", detail: "上传资料当前读取表单文本和文件名，暂未解析 PPT、Word、PDF、Excel 正文。" },
     { name: "资料引用", status: "已接入", detail: "项目详情已支持关联资料、查看资料和移除引用。" },
-    { name: "全局 AI 配置", status: "已接入", detail: "Brief、营销调研、讲稿输出统一使用系统设置中的接口、API Key 和模型。" },
+    { name: "分模块 AI 配置", status: "已接入", detail: "默认 AI、QA、Brief、调研模块、完整报告、方案分析和讲稿可分别选择接口与模型。" },
     { name: "导出能力", status: "部分接入", detail: "项目列表已支持 CSV 导出，后续可补 Brief 报告和方案大纲导出。" },
   ];
 
@@ -7645,17 +7657,28 @@ function Settings() {
     }
   };
 
-  const loadGlobalAiModels = async () => {
-    setIsLoadingModels(true);
+  const updateAiModuleConfig = (key: AiModuleKey, patch: Partial<BriefApiConfig>) => {
+    setAiConfig((current) => {
+      const normalized = normalizeAiModuleConfig(current);
+      return {
+        ...normalized,
+        [key]: { ...normalized[key], ...patch },
+      };
+    });
+  };
+
+  const loadAiModels = async (key: AiModuleKey) => {
+    const targetConfig = resolveModuleAiConfig(aiConfig, key);
+    setLoadingModelKey(key);
     setAiSettingsMessage("");
     try {
-      if (!inferModelsEndpoint(aiConfig.endpoint)) throw new Error("请先填写接口地址。");
+      if (!inferModelsEndpoint(targetConfig.endpoint)) throw new Error("请先填写接口地址，或先配置默认 AI。");
       const response = await fetch("/api/brief-models", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          endpoint: aiConfig.endpoint,
-          apiKey: aiConfig.apiKey,
+          endpoint: targetConfig.endpoint,
+          apiKey: targetConfig.apiKey,
         }),
       });
       const result = await response.json();
@@ -7666,48 +7689,67 @@ function Settings() {
           ? result.models.map((item: string | { id?: string; name?: string }) => (typeof item === "string" ? item : item.id || item.name)).filter(Boolean)
           : [];
       if (!models.length) throw new Error("接口返回中没有找到模型列表。");
-      setModelOptions(models);
-      setAiConfig((current) => ({ ...current, model: current.model || models[0] }));
-      setAiSettingsMessage(`已拉取 ${models.length} 个模型，配置已自动保存。`);
+      setModelOptions((current) => ({ ...current, [key]: models }));
+      updateAiModuleConfig(key, { model: aiConfig[key].model || models[0] });
+      setAiSettingsMessage(`${aiModuleOptions.find((option) => option.key === key)?.title || "模块"}已拉取 ${models.length} 个模型。`);
     } catch (error) {
-      setModelOptions([]);
+      setModelOptions((current) => ({ ...current, [key]: [] }));
       setAiSettingsMessage(error instanceof Error ? error.message : "模型列表拉取失败。");
     } finally {
-      setIsLoadingModels(false);
+      setLoadingModelKey(null);
     }
   };
 
   const saveAiSettings = () => {
-    setAiConfig(aiConfig);
-    setAiSettingsMessage("全局 AI 配置已保存，Brief、营销调研和讲稿输出会自动使用。");
+    setAiConfig(normalizeAiModuleConfig(aiConfig));
+    setAiSettingsMessage("分模块 AI 配置已保存。未单独填写的模块会继承默认 AI。");
   };
 
   return (
     <section className="page">
       <PageTitle title="系统设置" subtitle="MVP 阶段包含用户、角色、标签和资料分类维护。" />
-      <Card title="全局 AI 配置">
-        <div className="form-grid">
-          <Field label="接口地址" value={aiConfig.endpoint} onChange={(value) => setAiConfig({ ...aiConfig, endpoint: value })} />
-          <label>
-            <span>API Key</span>
-            <input type="password" value={aiConfig.apiKey} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder="可选，自动放入 Authorization Bearer" />
-          </label>
-          <label>
-            <span>模型</span>
-            <select value={aiConfig.model} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })}>
-              <option value="">手动填写接口后拉取模型，或直接留空</option>
-              {aiConfig.model && !modelOptions.includes(aiConfig.model) && <option value={aiConfig.model}>{aiConfig.model}</option>}
-              {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
-          </label>
+      <Card title="分模块 AI 配置">
+        <div className="ai-module-config-list">
+          {aiModuleOptions.map((option) => {
+            const item = aiConfig[option.key];
+            const resolved = resolveModuleAiConfig(aiConfig, option.key);
+            const options = modelOptions[option.key] || [];
+            const inheritsDefault = option.key !== "default" && !item.endpoint.trim() && !item.apiKey.trim() && !item.model.trim();
+            return (
+              <div className="ai-module-config-row" key={option.key}>
+                <div className="ai-module-config-meta">
+                  <strong>{option.title}</strong>
+                  <span>{option.description}</span>
+                  <em>推荐：{option.recommendedModel}</em>
+                  {inheritsDefault && <small>当前继承默认 AI：{resolved.model || "未指定模型"}</small>}
+                </div>
+                <Field label="接口地址" value={item.endpoint} onChange={(value) => updateAiModuleConfig(option.key, { endpoint: value })} />
+                <label>
+                  <span>API Key</span>
+                  <input type="password" value={item.apiKey} onChange={(event) => updateAiModuleConfig(option.key, { apiKey: event.target.value })} placeholder={option.key === "default" ? "可选，自动放入 Authorization Bearer" : "留空则继承默认 Key"} />
+                </label>
+                <label>
+                  <span>模型</span>
+                  <select value={item.model} onChange={(event) => updateAiModuleConfig(option.key, { model: event.target.value })}>
+                    <option value="">{option.key === "default" ? "拉取模型或直接留空" : "留空继承默认模型"}</option>
+                    {item.model && !options.includes(item.model) && <option value={item.model}>{item.model}</option>}
+                    {resolved.model && resolved.model !== item.model && !options.includes(resolved.model) && <option value={resolved.model}>{resolved.model}（继承）</option>}
+                    {options.map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                </label>
+                <button className="ghost-button" onClick={() => loadAiModels(option.key)} disabled={loadingModelKey === option.key}>
+                  {loadingModelKey === option.key ? "拉取中..." : "拉取模型"}
+                </button>
+              </div>
+            );
+          })}
         </div>
         <div className="inline-actions">
-          <button className="ghost-button" onClick={loadGlobalAiModels} disabled={isLoadingModels}>{isLoadingModels ? "拉取中..." : "拉取模型列表"}</button>
-          <button className="primary-button" onClick={saveAiSettings}>保存全局 AI 配置</button>
+          <button className="primary-button" onClick={saveAiSettings}>保存分模块 AI 配置</button>
           {aiSettingsMessage && <span>{aiSettingsMessage}</span>}
         </div>
         <div className="note-box">
-          <p>配置后，方案 QA 生成、营销调研、讲稿输出都会直接使用这里的接口。未配置接口时，各页面会自动使用本地规则兜底生成。</p>
+          <p>每个模块都可以单独填接口、Key 和模型；留空时继承“默认 AI”。例如默认用 deepseek-chat，完整调研报告单独填 deepseek-reasoner。</p>
         </div>
       </Card>
       <Card title="知识库检索方式">
