@@ -5945,51 +5945,34 @@ ${scenario.questions.map((item) => `- ${item}`).join("\n")}
   const runFinalReport = async () => {
     setIsRunningFinalReport(true);
     try {
+      if (!apiConfig.endpoint.trim()) {
+        setFinalReport("请先到系统设置填写全局 AI 配置。完整营销调研报告必须由 AI 基于 Brief 拆解、固定模块、可变模块和资料库引用进行分析生成，不再使用本地规则拼接。");
+        return;
+      }
       const prompt = `${buildFinalMarketingResearchReportPrompt({ briefContext: briefBreakdown, fixedOutputs: fixedModuleOutputs, variableOutputs: variableModuleOutputs, form: briefForm })}
 
 资料库引用：
 ${linkedResourceContext}`;
-      if (apiConfig.endpoint.trim()) {
-        setFinalReport("正在整合完整营销调研报告...");
-        const response = await fetch("/api/marketing-research-run", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            endpoint: apiConfig.endpoint.trim(),
-            apiKey: apiConfig.apiKey.trim(),
-            model: apiConfig.model.trim() || undefined,
-            input: { briefBreakdown, fixedModuleOutputs, variableModuleOutputs, briefForm, linkedResources },
-            prompt,
-            messages: [
-              { role: "system", content: "你是资深游戏营销调研负责人，正在整合完整前期调研报告。" },
-              { role: "user", content: prompt },
-            ],
-          }),
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error?.message || result.error || "完整调研报告生成失败。");
-        const output = extractAiText(result);
-        setFinalReport(output || cleanAiMarkdown(JSON.stringify(result, null, 2)));
-      } else {
-        setFinalReport(`一、项目需求总览
-${briefBreakdown ? summarize(briefBreakdown) : "尚未生成 Brief 拆解，建议先完成第一步。"}
-
-二、固定模块结论
-${Object.entries(fixedModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${summarize(output)}`).join("\n\n") || "尚未生成固定模块分析。"}
-
-三、可变模块结论
-${Object.entries(variableModuleOutputs).filter(([key]) => key !== "_message").map(([name, output]) => `【${name}】\n${summarize(output)}`).join("\n\n") || "尚未生成可变模块分析。"}
-
-四、营销机会与风险
-- 机会：围绕 Brief 中的核心需求，把用户动机、产品卖点、社群文化和竞品差异串成主线。
-- 风险：缺少预算、节点、素材授权或社群敏感点证据时，不建议直接进入执行方案。
-
-五、待补充数据与客户确认 QA
-- 请确认 KPI、预算区间、时间节点、素材授权、竞品范围、合规限制和最终交付格式。
-
-六、资料库引用
-${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title}（${resource.type}）：${resource.summary}`).join("\n") : "- 暂未关联资料库文件。"}`);
-      }
+      setFinalReport("正在调用 AI 整合完整营销调研报告...");
+      const response = await fetch("/api/marketing-research-run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          endpoint: apiConfig.endpoint.trim(),
+          apiKey: apiConfig.apiKey.trim(),
+          model: apiConfig.model.trim() || undefined,
+          input: { briefBreakdown, fixedModuleOutputs, variableModuleOutputs, briefForm, linkedResources },
+          prompt,
+          messages: [
+            { role: "system", content: "你是资深游戏营销调研负责人，正在整合完整前期调研报告。必须基于输入材料进行 AI 分析，输出纯 Markdown 文本，不要输出莫名其妙的星号或装饰符号。" },
+            { role: "user", content: prompt },
+          ],
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || result.error || "完整调研报告生成失败。");
+      const output = extractAiText(result);
+      setFinalReport(output || cleanAiMarkdown(JSON.stringify(result, null, 2)));
       addJob("营销调研报告", `${briefForm.projectName || "未命名项目"} 完整营销调研报告`, "营销调研");
     } catch (error) {
       setFinalReport(error instanceof Error ? error.message : "完整调研报告生成失败。");
@@ -6174,7 +6157,7 @@ ${linkedResources.length ? linkedResources.map((resource) => `- ${resource.title
             className="editable-output-area"
             value={finalReport}
             onChange={(event) => setFinalReport(event.target.value)}
-            placeholder="点击“生成完整报告”后，系统会把 Brief 拆解、固定模块分析、客户选择的可变模块分析统一整理成一份完整的营销调研报告。"
+            placeholder="点击“生成完整报告”后，AI 会把 Brief 拆解、固定模块分析、客户选择的可变模块分析和资料库引用统一分析成一份完整营销调研报告。"
           />
         </Card>
       )}
@@ -6249,10 +6232,10 @@ function GlobalAiConfigNotice({ apiConfig }: { apiConfig: BriefApiConfig }) {
   const isConfigured = Boolean(apiConfig.endpoint.trim());
   return (
     <div className={`global-ai-config-notice ${isConfigured ? "configured" : "fallback"}`}>
-      <span>{isConfigured ? "已使用全局 AI" : "本地兜底"}</span>
+      <span>{isConfigured ? "已使用全局 AI" : "未配置 AI"}</span>
       <div>
         <strong>{isConfigured ? "接口配置来自系统设置" : "系统设置未配置 AI 接口"}</strong>
-        <p>{isConfigured ? `当前模型：${apiConfig.model || "未指定，由接口默认处理"}。如需修改接口、Key 或模型，请到系统设置统一调整。` : "当前页面会先使用本地规则生成；如需调用外部模型，请到系统设置填写全局 AI 配置。"}</p>
+        <p>{isConfigured ? `当前模型：${apiConfig.model || "未指定，由接口默认处理"}。如需修改接口、Key 或模型，请到系统设置统一调整。` : "需要 AI 生成的模块会提示先到系统设置填写全局 AI 配置，不再用本地规则伪装成 AI 结果。"}</p>
       </div>
     </div>
   );
@@ -6388,6 +6371,7 @@ function PeopleManagement({
   const [showForm, setShowForm] = useState(false);
   const [advice, setAdvice] = useState("");
   const [detailView, setDetailView] = useState<PeopleDetailView | null>(initialDetailView);
+  const [showAllAssignments, setShowAllAssignments] = useState(false);
   const [form, setForm] = useState({
     name: "",
     role: "执行策划",
@@ -6400,6 +6384,9 @@ function PeopleManagement({
   const taskStats = useMemo(() => {
     return buildMemberLoadStats(members, projects);
   }, [members, projects]);
+  const plannerTaskStats = useMemo(() => {
+    return taskStats.filter(({ member }) => member.role.includes("策划"));
+  }, [taskStats]);
 
   useEffect(() => {
     if (!initialDetailView) return;
@@ -6447,10 +6434,16 @@ function PeopleManagement({
         nextMilestone,
       };
     }).sort((a, b) => {
-      const riskRank: Record<Risk, number> = { 严重: 4, 紧急: 3, 一般: 2, 正常: 1 };
-      return riskRank[b.risk] - riskRank[a.risk] || b.delayedTasks.length - a.delayedTasks.length || a.progress - b.progress;
+      const latestDate = (project: Project) => Math.max(
+        Date.parse(project.submit || "") || 0,
+        Date.parse(project.pitch || "") || 0,
+        Date.parse(project.bidDate || "") || 0,
+        Date.parse(project.start || "") || 0,
+      );
+      return latestDate(b.project) - latestDate(a.project) || a.progress - b.progress;
     });
   }, [members, projects]);
+  const visibleAssignmentRows = showAllAssignments ? assignmentRows : assignmentRows.slice(0, 5);
 
   const addMember = () => {
     if (!form.name.trim()) return;
@@ -6559,7 +6552,7 @@ ${actionLines.join("\n")}
         action={isAdmin ? <button className="primary-button" onClick={() => setShowForm((current) => !current)}>新增成员</button> : <span className="soft-pill">只读模式</span>}
       />
       <div className="metric-grid">
-        <Metric label="团队成员" value={members.length} tone="blue" onClick={() => setDetailView("members")} />
+        <Metric label="团队成员" value={plannerTaskStats.length} tone="blue" onClick={() => setDetailView("members")} />
         <Metric label="进行中任务" value={activeTaskRows.length} tone="green" onClick={() => setDetailView("active")} />
         <Metric label="偏高负载" value={overloadedRows.length} tone="orange" onClick={() => setDetailView("overload")} />
         <Metric label="延期任务" value={delayedTaskRows.length} tone="red" onClick={() => setDetailView("delayed")} />
@@ -6590,7 +6583,7 @@ ${actionLines.join("\n")}
                   </tr>
                 </thead>
                 <tbody>
-                  {taskStats.map(({ member, activeTasks, delayedTasks, loadRate, loadStatus }) => (
+                  {plannerTaskStats.map(({ member, activeTasks, delayedTasks, loadRate, loadStatus }) => (
                     <tr key={member.id}>
                       <td><strong>{member.name}</strong></td>
                       <td>{member.role}</td>
@@ -6645,7 +6638,19 @@ ${actionLines.join("\n")}
         </Card>
       )}
       <div className="assignment-master">
-      <Card title="项目人员分工总表" action={<span className="soft-pill">随项目排期自动更新</span>}>
+      <Card
+        title="项目人员分工总表"
+        action={(
+          <div className="table-actions">
+            <span className="soft-pill">{showAllAssignments ? `全部 ${assignmentRows.length} 个项目` : `近期 5 / ${assignmentRows.length} 个项目`}</span>
+            {assignmentRows.length > 5 && (
+              <button className="ghost-button" onClick={() => setShowAllAssignments((current) => !current)}>
+                {showAllAssignments ? "收起" : "查看全部"}
+              </button>
+            )}
+          </div>
+        )}
+      >
         <div className="table-scroll">
           <table className="joined-table">
             <thead>
@@ -6662,7 +6667,7 @@ ${actionLines.join("\n")}
               </tr>
             </thead>
             <tbody>
-              {assignmentRows.map(({ project, progress, risk, delayedTasks, riskyTasks, collaborators, recommendations, nextMilestone }) => (
+              {visibleAssignmentRows.map(({ project, progress, risk, delayedTasks, riskyTasks, collaborators, recommendations, nextMilestone }) => (
                 <tr key={project.id}>
                   <td>
                     <strong>{project.name}</strong>
